@@ -10,7 +10,8 @@
 //!   ← / → / h/l — Switch between GPUs
 //!   r            — Force refresh
 //!   ?            — Toggle help
-//!   j / k        — Scroll
+//!   ↑ / ↓ / j/k  — Scroll focused panel (PgUp/PgDn: by 10)
+//!   c / g        — Focus CPU / GPU panel (Overview)
 
 pub mod app;
 pub mod gpu;
@@ -27,7 +28,7 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 
-use app::ViewTab;
+use app::{OverviewFocus, ViewTab};
 
 /// Refresh rate (1 second).
 const TICK_RATE: Duration = Duration::from_secs(1);
@@ -82,6 +83,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> color_eyre:
                         continue;
                     }
 
+                    let overview = app.current_tab == ViewTab::Overview;
                     match key.code {
                         // Quit
                         KeyCode::Char('q') | KeyCode::Esc => app.quit(),
@@ -103,8 +105,16 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> color_eyre:
                         KeyCode::Char('?') => app.toggle_help(),
 
                         // Scroll
+                        KeyCode::Char('j') | KeyCode::Down if overview => app.scroll_overview(1),
+                        KeyCode::Char('k') | KeyCode::Up if overview => app.scroll_overview(-1),
+                        KeyCode::PageDown if overview => app.scroll_overview(10),
+                        KeyCode::PageUp if overview => app.scroll_overview(-10),
                         KeyCode::Char('j') | KeyCode::Down => app.scroll_down(),
                         KeyCode::Char('k') | KeyCode::Up => app.scroll_up(),
+
+                        // Overview panel focus
+                        KeyCode::Char('c') => app.overview_focus = OverviewFocus::Cpu,
+                        KeyCode::Char('g') => app.overview_focus = OverviewFocus::Gpu,
 
                         _ => {}
                     }

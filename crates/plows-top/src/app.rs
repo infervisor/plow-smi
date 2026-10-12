@@ -1,5 +1,6 @@
 //! Application state management — rich state for htop-like display.
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 
 use sysinfo::{Pid, ProcessesToUpdate, System};
@@ -19,6 +20,13 @@ pub enum ViewTab {
     Overview,
     GpuDetail,
     Processes,
+}
+
+/// Which Overview panel ↑/↓ scrolls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverviewFocus {
+    Cpu,
+    Gpu,
 }
 
 /// A unified process entry for the process table.
@@ -81,6 +89,11 @@ pub struct App {
     pub current_tab: ViewTab,
     pub show_help: bool,
     pub scroll_offset: u16,
+    pub overview_focus: OverviewFocus,
+    /// First visible row of the CPU panel.
+    pub cpu_scroll: usize,
+    /// Largest useful `cpu_scroll`, recorded by the last draw.
+    pub cpu_scroll_max: Cell<usize>,
 }
 
 impl App {
@@ -145,6 +158,9 @@ impl App {
             current_tab: ViewTab::Overview,
             show_help: false,
             scroll_offset: 0,
+            overview_focus: OverviewFocus::Gpu,
+            cpu_scroll: 0,
+            cpu_scroll_max: Cell::new(0),
         }
     }
 
@@ -338,6 +354,26 @@ impl App {
 
     pub fn scroll_down(&mut self) {
         self.scroll_offset = self.scroll_offset.saturating_add(1);
+    }
+
+    /// Scroll the focused Overview panel by `delta` rows (GPU panel: by GPU).
+    pub fn scroll_overview(&mut self, delta: isize) {
+        match self.overview_focus {
+            OverviewFocus::Cpu => {
+                self.cpu_scroll = self
+                    .cpu_scroll
+                    .min(self.cpu_scroll_max.get())
+                    .saturating_add_signed(delta)
+                    .min(self.cpu_scroll_max.get());
+            }
+            OverviewFocus::Gpu if !self.gpus.is_empty() => {
+                self.selected_gpu = self
+                    .selected_gpu
+                    .saturating_add_signed(delta)
+                    .min(self.gpus.len() - 1);
+            }
+            OverviewFocus::Gpu => {}
+        }
     }
 
     pub fn quit(&mut self) {
