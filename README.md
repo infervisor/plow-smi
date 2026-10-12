@@ -157,6 +157,49 @@ direct Rust library integration details.
 
 Missing vendors are logged and skipped — never crash the process.
 
+### Library search paths
+
+Vendor libraries are loaded at runtime with `dlopen`. Each is tried by soname
+first (honouring `LD_LIBRARY_PATH` and the system loader), then by absolute path:
+
+| Vendor | Absolute paths tried |
+|--------|----------------------|
+| NVIDIA (`libnvidia-ml.so.1`) | `/run/opengl-driver/lib` |
+| AMD (`libamd_smi.so`) | `/opt/rocm/lib`, `/run/opengl-driver/lib` |
+| Intel (`libze_loader.so.1`) | `/run/opengl-driver/lib` |
+
+### NixOS
+
+The NVIDIA driver must be enabled in your system configuration, otherwise there
+is no `libnvidia-ml.so.1` to load and no GPU is reported (`nvidia-smi` will not
+exist either):
+
+```nix
+services.xserver.videoDrivers = [ "nvidia" ];   # add "modesetting" first on hybrid laptops
+hardware.graphics.enable = true;
+hardware.nvidia = {
+  modesetting.enable = true;
+  open = true;   # RTX 20-series and newer; set false for older GPUs
+  package = config.boot.kernelPackages.nvidiaPackages.stable;
+};
+```
+
+Run `sudo nixos-rebuild switch` and reboot. NixOS exposes the driver's userspace
+libraries under `/run/opengl-driver/lib`, which is outside the default loader
+path; plow-smi searches it automatically, so `LD_LIBRARY_PATH` is not needed.
+
+### Troubleshooting: GPU not detected
+
+1. Run `nvidia-smi` (or `rocm-smi`). If it is missing or fails, install or enable
+   the vendor driver first; plow-smi cannot report a GPU the driver does not expose.
+2. On a hybrid laptop, make sure the NVIDIA GPU is not powered off or blacklisted
+   (for example `nouveau` blacklisted with no proprietary driver configured).
+3. Check the library is visible: `ls /run/opengl-driver/lib/libnvidia-ml.so.1`
+   (NixOS) or `ldconfig -p | grep nvidia-ml` (other distributions).
+4. For a non-standard location, set `LD_LIBRARY_PATH` to the directory containing
+   the library.
+5. Run with `RUST_LOG=debug` to see why a vendor library failed to load.
+
 ## Features
 
 - Multi-vendor metrics (util, memory, temp, power, clocks, fan)

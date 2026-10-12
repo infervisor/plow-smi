@@ -50,11 +50,17 @@ pub unsafe fn resolve_optional<T: Copy>(lib: &Library, name: &[u8]) -> Option<T>
     Some(*sym)
 }
 
+/// Where NixOS exposes the driver's userspace libraries. It is not on the
+/// default `dlopen` search path, so vendor libraries are also tried by
+/// absolute path under it.
+const NIXOS_DRIVER_DIR: &str = "/run/opengl-driver/lib";
+
 /// Candidate library names for a vendor on the current platform.
 pub fn nvml_candidates() -> &'static [&'static str] {
     &[
         "libnvidia-ml.so.1",
         "libnvidia-ml.so",
+        "/run/opengl-driver/lib/libnvidia-ml.so.1",
         #[cfg(target_os = "windows")]
         "nvml.dll",
     ]
@@ -67,6 +73,7 @@ pub fn amdsmi_candidates() -> &'static [&'static str] {
         "libamd_smi.so.1",
         "/opt/rocm/lib/libamd_smi.so",
         "/opt/rocm/lib/libamd_smi.so.1",
+        "/run/opengl-driver/lib/libamd_smi.so",
         #[cfg(target_os = "windows")]
         "amd_smi_dll.dll",
     ]
@@ -87,6 +94,7 @@ const HOST_LIB_DIRS: &[&str] = &[
     "/lib64",
     "/usr/lib",
     "/opt/rocm/lib",
+    NIXOS_DRIVER_DIR,
 ];
 
 /// Load each soname, so a vendor library that needs it finds it already
@@ -118,6 +126,7 @@ pub fn level_zero_candidates() -> &'static [&'static str] {
     &[
         "libze_loader.so.1",
         "libze_loader.so",
+        "/run/opengl-driver/lib/libze_loader.so.1",
         #[cfg(target_os = "windows")]
         "ze_loader.dll",
     ]
