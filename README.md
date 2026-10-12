@@ -7,7 +7,7 @@
 
 Production-grade GPU observability and control for heterogeneous compute — NVIDIA, AMD, Intel, and Apple Silicon — from one Rust workspace.
 
-**No compile-time GPU SDKs.** Vendor libraries (`libnvidia-ml`, `libamd_smi`, `libze_loader`) are loaded at runtime with `dlopen`. One binary works on CPU-only hosts and enables GPUs automatically when drivers are present.
+**No compile-time GPU SDKs.** Vendor libraries (`libnvidia-ml`, `libamd_smi`, `libze_loader`) are loaded at runtime with `dlopen`. One binary works on CPU-only hosts and enables GPUs automatically when drivers are present. On Apple Silicon, telemetry comes from macOS system frameworks, so nothing extra is installed.
 
 ![plows-top demo](assets/plows-top-demo.gif)
 
@@ -18,7 +18,7 @@ Production-grade GPU observability and control for heterogeneous compute — NVI
 | **plows-gpu** | Shared GPU layer: discover backends, metrics, processes, power/clock control |
 | **plows-exporter** | Prometheus `/metrics` HTTP server |
 | **plows-top** | Interactive TUI (htop for GPUs) |
-| **plows-ctl** | List / info / set power & clocks |
+| **plows-ctl** | List / info / set power & clocks (Apple Silicon: read-only telemetry) |
 | **plows-cli** | Unified `plow-smi` binary (`export`, `top`, `ctl`) |
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the design.
@@ -42,11 +42,14 @@ cargo build --release
 # Control
 ./target/release/plows-ctl nvidia list
 ./target/release/plows-ctl amd list
+./target/release/plows-ctl apple info   # Apple Silicon, read-only
 
 # Unified CLI
 ./target/release/plow-smi export --all
 ./target/release/plow-smi top
 ./target/release/plow-smi ctl nvidia-list
+./target/release/plow-smi ctl apple-info --format json   # Apple Silicon
+./target/release/plow-smi export --apple --system         # Apple Silicon exporter
 ```
 
 Dev:
@@ -131,31 +134,50 @@ not overwrite an existing release.
 
 ## Requirements
 
-### Apple Silicon
-
-Native ARM64 macOS support provides CPU/GPU activity, clocks, power, temperatures,
-unified memory, and Neural Engine power without sudo. Unsupported ANE utilization
-and clocks remain absent; shared RAM is not reported as dedicated VRAM.
-
-```bash
-plow-smi top
-plow-smi ctl apple-info --format json
-plow-smi export --apple --system --bind 127.0.0.1
-```
-
-Apple control is read-only. Hardware validated on M4 Pro / macOS 26.5.1;
-other M-series Macs are intended but unverified. Apple private APIs may change.
-See [DESIGN_APPLE_SILICON.md](DESIGN_APPLE_SILICON.md) for compatibility and
-direct Rust library integration details.
-
 | Need | At build | At runtime |
 |------|----------|------------|
 | CUDA / ROCm / oneAPI SDKs | **Not required** | Not required |
 | NVIDIA driver + `libnvidia-ml.so.1` | — | Optional (auto) |
 | AMD ROCm + `libamd_smi.so` | — | Optional (auto) |
 | Intel Level Zero + `libze_loader.so` | — | Optional (auto) |
+| Apple Silicon (macOS, ARM64) | — | Built in (macOS system frameworks) |
 
 Missing vendors are logged and skipped — never crash the process.
+
+### Apple Silicon
+
+Native ARM64 macOS support (`aarch64-apple-darwin`) reports the SoC as one
+integrated GPU (`apple-soc-0`). **No sudo required.**
+
+- **Reported:** CPU and GPU activity, clocks, power (CPU/GPU/ANE), temperatures,
+  unified memory, per-cluster CPU tiers, and Neural Engine power.
+- **Not reported:** ANE utilization, frequency and temperature (unavailable from
+  the OS). Shared RAM is exposed as `apple_unified_memory_*`, never as dedicated
+  VRAM. Unsupported counters are `null` in JSON, `N/A` in the TUI and absent from
+  Prometheus.
+- **Read-only:** no power limits, clock limits or persistence; `plows-ctl apply`
+  rejects power control on Apple.
+- **Intel Macs** get system monitoring but no Apple GPU backend.
+
+```bash
+plow-smi top                                       # TUI: CPU/GPU/ANE + shared RAM
+plow-smi ctl apple-list                            # list devices
+plow-smi ctl apple-info --format json              # one-shot telemetry
+plow-smi export --apple --system --bind 127.0.0.1  # Prometheus on :9835
+plows-ctl apple info                               # same via plows-ctl
+```
+
+One-shot commands wait about 1.1 seconds to collect a complete energy sample.
+
+Prometheus metrics reuse the `gpu_*` names for GPU values and add `apple_cpu_*`,
+`apple_npu_*`, `apple_cpu_cluster_*{cluster=...}`,
+`apple_temperature_celsius{sensor=...}` and `apple_unified_memory_{used,total}_bytes`.
+`apple_compute_power_watts` is CPU+GPU+ANE, not whole-system power.
+
+Hardware validated on M4 Pro / macOS 26.5.1; other M-series Macs are intended but
+unverified. Apple private APIs may change between macOS releases. See
+[DESIGN_APPLE_SILICON.md](DESIGN_APPLE_SILICON.md) for compatibility and direct
+Rust library integration details.
 
 ### Library search paths
 
@@ -167,6 +189,9 @@ first (honouring `LD_LIBRARY_PATH` and the system loader), then by absolute path
 | NVIDIA (`libnvidia-ml.so.1`) | `/run/opengl-driver/lib` |
 | AMD (`libamd_smi.so`) | `/opt/rocm/lib`, `/run/opengl-driver/lib` |
 | Intel (`libze_loader.so.1`) | `/run/opengl-driver/lib` |
+
+Apple Silicon does not use `dlopen` for vendor libraries; it reads IOReport, IOKit
+and sysctl from macOS directly.
 
 ### NixOS
 
@@ -202,11 +227,12 @@ path; plow-smi searches it automatically, so `LD_LIBRARY_PATH` is not needed.
 
 ## Features
 
-- Multi-vendor metrics (util, memory, temp, power, clocks, fan)
+- Multi-vendor metrics: NVIDIA, AMD, Intel and Apple Silicon (util, memory, temp, power, clocks, fan)
+- Apple Silicon SoC telemetry: CPU/GPU/ANE power, per-cluster CPU tiers, sensors, unified memory (no sudo)
 - Runtime backend discovery (multiple vendors active at once)
 - Prometheus metrics with per-device labels
 - TUI with GPU + system + process view
-- Power limits / clocks / perf levels (NVIDIA + AMD; needs privileges)
+- Power limits / clocks / perf levels (NVIDIA + AMD; needs privileges). Apple Silicon is read-only
 - Structured logging via `tracing`
 
 ## Contributing
