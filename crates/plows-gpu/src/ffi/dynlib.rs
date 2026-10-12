@@ -61,6 +61,10 @@ pub fn nvml_candidates() -> &'static [&'static str] {
         "libnvidia-ml.so.1",
         "libnvidia-ml.so",
         "/run/opengl-driver/lib/libnvidia-ml.so.1",
+        // A Nix-built binary on a non-NixOS host never searches these.
+        "/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1",
+        "/usr/lib/aarch64-linux-gnu/libnvidia-ml.so.1",
+        "/usr/lib64/libnvidia-ml.so.1",
         #[cfg(target_os = "windows")]
         "nvml.dll",
     ]
@@ -127,6 +131,10 @@ pub fn level_zero_candidates() -> &'static [&'static str] {
         "libze_loader.so.1",
         "libze_loader.so",
         "/run/opengl-driver/lib/libze_loader.so.1",
+        // A Nix-built binary on a non-NixOS host never searches these.
+        "/usr/lib/x86_64-linux-gnu/libze_loader.so.1",
+        "/usr/lib/aarch64-linux-gnu/libze_loader.so.1",
+        "/usr/lib64/libze_loader.so.1",
         #[cfg(target_os = "windows")]
         "ze_loader.dll",
     ]
