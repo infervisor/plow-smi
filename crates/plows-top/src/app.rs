@@ -199,7 +199,14 @@ impl App {
                 let util = gpu.gpu_utilization_percent.unwrap_or(0) as f64;
                 push_history(&mut self.gpu_util_history[i], util);
 
-                let mem_util = gpu.memory_utilization_percent.unwrap_or(0) as f64;
+                // VRAM occupancy (used/total), not memory-controller activity,
+                // so the VRAM% chart matches the VRAM gauge.
+                let mem_util = match (gpu.memory_used_bytes, gpu.memory_total_bytes) {
+                    (Some(used), Some(total)) if total > 0 => {
+                        used as f64 / total as f64 * 100.0
+                    }
+                    _ => gpu.memory_utilization_percent.unwrap_or(0) as f64,
+                };
                 push_history(&mut self.mem_util_history[i], mem_util);
 
                 let temp = gpu.temperature_celsius.unwrap_or(0) as f64;
