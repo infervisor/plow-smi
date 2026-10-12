@@ -106,6 +106,22 @@ impl GpuBackend for StubBackend {
 }
 
 #[test]
+fn candidates_include_the_nixos_driver_directory() {
+    for candidates in [
+        dynlib::nvml_candidates(),
+        dynlib::amdsmi_candidates(),
+        dynlib::level_zero_candidates(),
+    ] {
+        assert!(
+            candidates
+                .iter()
+                .any(|c| c.starts_with("/run/opengl-driver/lib/")),
+            "no NixOS driver path in {candidates:?}"
+        );
+    }
+}
+
+#[test]
 fn missing_library_returns_library_not_found() {
     let err = dynlib::open_first(&[
         "/nonexistent/path/libnvidia-ml.so.1",
