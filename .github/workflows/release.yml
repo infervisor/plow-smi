@@ -56,6 +56,18 @@ jobs:
         run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
       - name: Build and test workspace
         run: nix flake check --print-build-logs
+      - name: Test optional features and lint
+        run: |
+          nix develop -c cargo test --workspace --all-features --locked
+          nix develop -c cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Audit Rust dependencies
+        if: matrix.system == 'x86_64-linux'
+        run: nix develop --command nix shell --inputs-from . nixpkgs#cargo-audit --command cargo audit --deny warnings
+      - name: Test control contracts with mock NVML
+        if: matrix.system == 'x86_64-linux'
+        run: |
+          nix build .#all --out-link result-workspace
+          PLOW_TEST_BIN_DIR=result-workspace/bin python3 -m unittest discover -s scripts -p 'test_*.py' -v
       - name: Build portable release
         run: nix build '.#packages.${{ matrix.system }}.release' --print-build-logs
       - name: Test archives outside the Nix store

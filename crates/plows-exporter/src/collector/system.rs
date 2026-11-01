@@ -1,7 +1,9 @@
 //! System metrics collector (CPU, memory, disk, network, temperature).
 
 use async_trait::async_trait;
-use sysinfo::{Components, Disks, Networks, System};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+use sysinfo::{Components, Disks, Networks, ProcessRefreshKind, ProcessesToUpdate, System};
 use tracing::debug;
 
 use crate::collector::{Collector, GpuSnapshot};
@@ -63,39 +65,82 @@ pub struct TemperatureInfo {
 pub struct SystemCollector {
     hostname: String,
     device_name: String,
+    state: Mutex<SystemState>,
+}
+
+struct SystemState {
+    sys: System,
+    disks: Disks,
+    networks: Networks,
+    components: Components,
+    cores: Option<usize>,
+    inventory_refreshed: Option<Instant>,
 }
 
 impl SystemCollector {
     /// Create a new system collector.
-    pub fn new() -> Self {
-        Self {
+    pub fn new() -> std::result::Result<Self, sysinfo::Error> {
+        let mut sys = System::new()?;
+        sys.refresh_cpu_usage();
+        Ok(Self {
+            state: Mutex::new(SystemState {
+                sys,
+                disks: Disks::new()?,
+                networks: Networks::new()?,
+                components: Components::new()?,
+                cores: System::physical_core_count().ok(),
+                inventory_refreshed: None,
+            }),
             hostname: whoami::fallible::hostname().unwrap_or_else(|_| "unknown".to_string()),
             device_name: whoami::fallible::devicename()
                 .or_else(|_| whoami::fallible::hostname())
                 .unwrap_or_else(|_| "unknown".to_string()),
-        }
+        })
     }
 
     /// Collect a full system snapshot.
     pub fn collect_system_snapshot(&self) -> SystemSnapshot {
-        let mut sys = System::new_all();
-        sys.refresh_cpu_all();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let SystemState {
+            sys,
+            disks: disk_list,
+            networks: net_list,
+            components,
+            cores,
+            inventory_refreshed,
+        } = &mut *state;
+        sys.refresh_cpu_usage();
+        sys.refresh_memory();
+        // Slow inventory/sensors need not be rescanned on every fast CPU/network tick.
+        // The default exporter interval is five seconds; faster UIs reuse this inventory.
+        if inventory_refreshed.is_none_or(|t| t.elapsed() >= Duration::from_secs(5)) {
+            sys.refresh_processes_specifics(
+                ProcessesToUpdate::All,
+                true,
+                ProcessRefreshKind::nothing().without_tasks(),
+            );
+            disk_list.refresh(true);
+            components.refresh(true);
+            *inventory_refreshed = Some(Instant::now());
+        }
 
         let cpu_usage = sys.global_cpu_usage() as f64;
-        let cpu_core_count = System::physical_core_count();
+        let cpu_core_count = *cores;
         let memory_total = sys.total_memory();
         let memory_used = sys.used_memory();
         let memory_available = sys.available_memory();
         let swap_total = sys.total_swap();
         let swap_used = sys.used_swap();
-        let uptime = System::uptime();
-        let load = System::load_average();
+        let uptime = System::uptime().unwrap_or_default();
+        let load = System::load_average().unwrap_or(sysinfo::LoadAvg {
+            one: 0.0,
+            five: 0.0,
+            fifteen: 0.0,
+        });
         let process_count = sys.processes().len();
 
         // Disks
-        let disk_list = Disks::new_with_refreshed_list();
         let disks: Vec<DiskInfo> = disk_list
-            .list()
             .iter()
             .map(|d| DiskInfo {
                 name: d.name().to_string_lossy().to_string(),
@@ -108,11 +153,11 @@ impl SystemCollector {
             .collect();
 
         // Networks
-        let net_list = Networks::new_with_refreshed_list();
+        net_list.refresh(true);
         let networks: Vec<NetworkInfo> = net_list
             .iter()
             .map(|(name, data)| NetworkInfo {
-                interface: name.clone(),
+                interface: name.to_string_lossy().into_owned(),
                 mac_address: data.mac_address().to_string(),
                 received_bytes: data.received(),
                 transmitted_bytes: data.transmitted(),
@@ -122,7 +167,6 @@ impl SystemCollector {
             .collect();
 
         // Temperatures
-        let components = Components::new_with_refreshed_list();
         let temperatures: Vec<TemperatureInfo> = components
             .iter()
             .filter_map(|c| {

@@ -1,6 +1,6 @@
 //! Intel GPU list/info via `plows-gpu` (Level Zero — metrics only).
 
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use colored::Colorize;
 use plows_gpu::{GpuBackend, IntelBackend};
 
@@ -30,10 +30,13 @@ pub fn list_gpus(format: &OutputFormat) -> Result<()> {
             index: i as u32,
             name: device.model,
             uuid: device.uuid,
-            temperature_c: m.temperature.map(|t| t as i64).unwrap_or(0),
-            power_w: m.power_usage.map(|w| w as u64).unwrap_or(0),
-            power_limit_w: m.power_limit.map(|w| w as u64).unwrap_or(0),
-            memory_used: m.memory_used.map(format_bytes).unwrap_or_else(|| "N/A".into()),
+            temperature_c: m.temperature.map(|t| t as i64),
+            power_w: m.power_usage.map(|w| w as u64),
+            power_limit_w: m.power_limit.map(|w| w as u64),
+            memory_used: m
+                .memory_used
+                .map(format_bytes)
+                .unwrap_or_else(|| "N/A".into()),
             memory_total: m
                 .memory_total
                 .map(format_bytes)
@@ -60,9 +63,9 @@ pub fn list_gpus(format: &OutputFormat) -> Result<()> {
                     "{:>3} {:30} {:>4}°C {:>5}/{:<5}W {:>16}",
                     e.index.to_string().cyan(),
                     e.name,
-                    e.temperature_c,
-                    e.power_w,
-                    e.power_limit_w,
+                    crate::value_or_na(e.temperature_c),
+                    crate::value_or_na(e.power_w),
+                    crate::value_or_na(e.power_limit_w),
                     format!("{}/{}", e.memory_used, e.memory_total),
                 );
             }

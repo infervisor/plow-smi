@@ -17,7 +17,7 @@ pub struct Config {
     pub port: u16,
 
     /// Metrics collection interval in seconds.
-    #[arg(short, long, default_value_t = 5)]
+    #[arg(short, long, default_value_t = 5, value_parser = clap::value_parser!(u64).range(1..))]
     pub interval: u64,
 
     /// Enable NVIDIA GPU metrics collection.
@@ -109,5 +109,14 @@ mod tests {
         assert!(!apple.nvidia_enabled() && !apple.no_collectors_enabled());
         let all = Config::parse_from(["plows-exporter", "--all"]);
         assert!(all.apple_enabled() && all.intel_enabled());
+    }
+}
+
+#[cfg(test)]
+mod interval_tests {
+    use super::*;
+    #[test]
+    fn rejects_zero_interval() {
+        assert!(Config::try_parse_from(["export", "--interval", "0"]).is_err());
     }
 }

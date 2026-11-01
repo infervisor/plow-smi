@@ -66,7 +66,7 @@ crates/plows-gpu/src/
 - Processes: NVML compute/graphics occupancy
 - Control (NVIDIA/AMD): power limit, application clocks, perf level, reset
 
-**Unsafe** stays in `ffi/`. Callers use owned Rust types only.
+**Unsafe** driver calls stay in `ffi/`; backend thread-safety implementations are documented alongside their handles. Callers use owned Rust types only.
 
 **Apple Silicon:** `AppleBackend` owns a one-second sampler thread with
 thread-confined runtime-loaded IOReport/IOKit handles. `refresh()` reads an
@@ -100,3 +100,14 @@ Public `GpuBackend` / `GpuManager` APIs stay stable.
 ## What was removed
 
 Former crates **`is-nvidia`** (`nvml-wrapper`) and **`is-amd-ffi`** are gone. All telemetry and control go through **`plows-gpu`** dlopen paths so the workspace has one GPU integration layer.
+
+Both exporter binaries call `plows_exporter::server::run`. Blocking OS/driver
+collection and Prometheus encoding use a bounded blocking pool, leaving HTTP
+and signal handling on a single async thread. System collectors retain sysinfo
+state so CPU and network deltas use consecutive samples. Device-series removal
+is tracked for GPUs, disks, network interfaces, and temperature sensors.
+
+The standalone control binary delegates to `plows_ctl::cli`; the unified CLI
+shares its CPU, capabilities, and apply handlers. Capability discovery never
+calls a setter. Contract version 2 reports available control interfaces rather
+than claiming that a permission test has succeeded.

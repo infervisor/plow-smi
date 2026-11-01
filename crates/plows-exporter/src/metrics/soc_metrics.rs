@@ -283,7 +283,7 @@ mod tests {
             .iter()
             .find(|f| f.name() == "apple_npu_power_watts")
             .unwrap();
-        assert_eq!(npu.get_metric()[0].get_gauge().value(), 0.125);
+        assert_eq!(npu.get_metric()[0].get_gauge().get_value(), 0.125);
         assert!(!families
             .iter()
             .any(|f| f.name() == "apple_npu_utilization_percent"));

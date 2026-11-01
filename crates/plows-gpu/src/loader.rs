@@ -127,8 +127,13 @@ impl GpuManager {
     /// Collect GPU processes across all backends that support it.
     pub fn collect_processes(&self) -> Vec<crate::process::GpuProcessInfo> {
         let mut out = Vec::new();
+        let mut offset = 0u32;
         for b in &self.backends {
-            out.extend(b.collect_processes());
+            out.extend(b.collect_processes().into_iter().map(|mut p| {
+                p.gpu_index += offset;
+                p
+            }));
+            offset += b.device_count() as u32;
         }
         out
     }

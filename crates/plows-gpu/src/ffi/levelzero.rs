@@ -168,39 +168,32 @@ pub struct LevelZeroApi {
     ze_device_get_properties:
         unsafe extern "C" fn(ZeDeviceHandle, *mut ZeDeviceProperties) -> ZeResult,
     zes_init: Option<unsafe extern "C" fn(u32) -> ZeResult>,
-    zes_device_get: Option<
-        unsafe extern "C" fn(ZeDriverHandle, *mut u32, *mut ZesDeviceHandle) -> ZeResult,
-    >,
+    zes_driver_get: Option<unsafe extern "C" fn(*mut u32, *mut ZeDriverHandle) -> ZeResult>,
+    zes_device_get:
+        Option<unsafe extern "C" fn(ZeDriverHandle, *mut u32, *mut ZesDeviceHandle) -> ZeResult>,
     zes_device_get_properties:
         Option<unsafe extern "C" fn(ZesDeviceHandle, *mut ZesDeviceProperties) -> ZeResult>,
     zes_device_pci_get_properties:
         Option<unsafe extern "C" fn(ZesDeviceHandle, *mut ZesPciProperties) -> ZeResult>,
-    zes_device_enum_memory_modules: Option<
-        unsafe extern "C" fn(ZesDeviceHandle, *mut u32, *mut *mut c_void) -> ZeResult,
-    >,
+    zes_device_enum_memory_modules:
+        Option<unsafe extern "C" fn(ZesDeviceHandle, *mut u32, *mut *mut c_void) -> ZeResult>,
     zes_memory_get_state: Option<unsafe extern "C" fn(*mut c_void, *mut ZesMemState) -> ZeResult>,
-    zes_device_enum_temperature_sensors: Option<
-        unsafe extern "C" fn(ZesDeviceHandle, *mut u32, *mut *mut c_void) -> ZeResult,
-    >,
+    zes_device_enum_temperature_sensors:
+        Option<unsafe extern "C" fn(ZesDeviceHandle, *mut u32, *mut *mut c_void) -> ZeResult>,
     zes_temperature_get_state: Option<unsafe extern "C" fn(*mut c_void, *mut f64) -> ZeResult>,
-    zes_device_enum_power_domains: Option<
-        unsafe extern "C" fn(ZesDeviceHandle, *mut u32, *mut *mut c_void) -> ZeResult,
-    >,
-    zes_power_get_energy_counter: Option<
-        unsafe extern "C" fn(*mut c_void, *mut ZesPowerEnergyCounter) -> ZeResult,
-    >,
-    zes_device_enum_freq_domains: Option<
-        unsafe extern "C" fn(ZesDeviceHandle, *mut u32, *mut *mut c_void) -> ZeResult,
-    >,
+    zes_device_enum_power_domains:
+        Option<unsafe extern "C" fn(ZesDeviceHandle, *mut u32, *mut *mut c_void) -> ZeResult>,
+    zes_power_get_energy_counter:
+        Option<unsafe extern "C" fn(*mut c_void, *mut ZesPowerEnergyCounter) -> ZeResult>,
+    zes_device_enum_freq_domains:
+        Option<unsafe extern "C" fn(ZesDeviceHandle, *mut u32, *mut *mut c_void) -> ZeResult>,
     zes_frequency_get_state:
         Option<unsafe extern "C" fn(*mut c_void, *mut ZesFreqState) -> ZeResult>,
-    zes_device_enum_fans: Option<
-        unsafe extern "C" fn(ZesDeviceHandle, *mut u32, *mut *mut c_void) -> ZeResult,
-    >,
+    zes_device_enum_fans:
+        Option<unsafe extern "C" fn(ZesDeviceHandle, *mut u32, *mut *mut c_void) -> ZeResult>,
     zes_fan_get_state: Option<unsafe extern "C" fn(*mut c_void, u32, *mut i32) -> ZeResult>,
-    zes_device_enum_engine_groups: Option<
-        unsafe extern "C" fn(ZesDeviceHandle, *mut u32, *mut *mut c_void) -> ZeResult,
-    >,
+    zes_device_enum_engine_groups:
+        Option<unsafe extern "C" fn(ZesDeviceHandle, *mut u32, *mut *mut c_void) -> ZeResult>,
     zes_engine_get_activity:
         Option<unsafe extern "C" fn(*mut c_void, *mut ZesEngineStats) -> ZeResult>,
     _lib: Library,
@@ -229,6 +222,7 @@ impl LevelZeroApi {
                     library,
                 )?,
                 zes_init: dynlib::resolve_optional(&lib, b"zesInit\0"),
+                zes_driver_get: dynlib::resolve_optional(&lib, b"zesDriverGet\0"),
                 zes_device_get: dynlib::resolve_optional(&lib, b"zesDeviceGet\0"),
                 zes_device_get_properties: dynlib::resolve_optional(
                     &lib,
@@ -312,7 +306,7 @@ impl LevelZeroApi {
         }
 
         let mut out = Vec::new();
-        for &driver in &drivers[..driver_count as usize] {
+        for &driver in drivers.iter().take(driver_count as usize) {
             let mut device_count = 0u32;
             let st =
                 unsafe { (self.ze_device_get)(driver, &mut device_count, std::ptr::null_mut()) };
@@ -325,7 +319,7 @@ impl LevelZeroApi {
             if st != ZE_RESULT_SUCCESS {
                 continue;
             }
-            for &device in &devices[..device_count as usize] {
+            for &device in devices.iter().take(device_count as usize) {
                 let mut props = ZeDeviceProperties::default();
                 let st = unsafe { (self.ze_device_get_properties)(device, &mut props) };
                 if st == ZE_RESULT_SUCCESS && props.device_type == ZE_DEVICE_TYPE_GPU {
@@ -359,27 +353,46 @@ impl LevelZeroApi {
         }
     }
 
-    /// Resolve a Sysman device handle for a core device by driver-local index.
-    pub fn sysman_device(&self, driver: ZeDriverHandle, index: u32) -> Option<ZesDeviceHandle> {
-        let zes_device_get = self.zes_device_get?;
-        let mut count = 0u32;
-        let st = unsafe { zes_device_get(driver, &mut count, std::ptr::null_mut()) };
-        if st != ZE_RESULT_SUCCESS || count == 0 || index >= count {
+    /// Standalone Sysman has its own driver handles and enumeration order.
+    /// Match UUIDs instead of passing a core driver handle or a global index.
+    pub fn sysman_device(&self, uuid: &[u8; 16]) -> Option<ZesDeviceHandle> {
+        let driver_get = self.zes_driver_get?;
+        let device_get = self.zes_device_get?;
+        let mut count = 0;
+        if unsafe { driver_get(&mut count, std::ptr::null_mut()) } != ZE_RESULT_SUCCESS {
             return None;
         }
-        let mut devices = vec![std::ptr::null_mut(); count as usize];
-        let st = unsafe { zes_device_get(driver, &mut count, devices.as_mut_ptr()) };
-        if st != ZE_RESULT_SUCCESS {
+        let mut drivers = vec![std::ptr::null_mut(); count as usize];
+        if unsafe { driver_get(&mut count, drivers.as_mut_ptr()) } != ZE_RESULT_SUCCESS {
             return None;
         }
-        devices.get(index as usize).copied()
+        drivers.truncate(count as usize);
+        for driver in drivers {
+            let mut count = 0;
+            if unsafe { device_get(driver, &mut count, std::ptr::null_mut()) } != ZE_RESULT_SUCCESS
+            {
+                continue;
+            }
+            let mut devices = vec![std::ptr::null_mut(); count as usize];
+            if unsafe { device_get(driver, &mut count, devices.as_mut_ptr()) } != ZE_RESULT_SUCCESS
+            {
+                continue;
+            }
+            devices.truncate(count as usize);
+            for device in devices {
+                if self
+                    .sysman_device_properties(device)
+                    .is_some_and(|p| &p.core.uuid == uuid)
+                {
+                    return Some(device);
+                }
+            }
+        }
+        None
     }
 
     /// Sysman device identity (serial / model) when available.
-    pub fn sysman_device_properties(
-        &self,
-        zes: ZesDeviceHandle,
-    ) -> Option<ZesDeviceProperties> {
+    pub fn sysman_device_properties(&self, zes: ZesDeviceHandle) -> Option<ZesDeviceProperties> {
         let f = self.zes_device_get_properties?;
         let mut props = ZesDeviceProperties::default();
         if unsafe { f(zes, &mut props) } == ZE_RESULT_SUCCESS {
@@ -419,7 +432,7 @@ impl LevelZeroApi {
         }
         let mut total = 0u64;
         let mut free = 0u64;
-        for &m in &modules[..count as usize] {
+        for &m in modules.iter().take(count as usize) {
             let mut state = ZesMemState {
                 stype: ZES_STRUCTURE_TYPE_MEM_STATE,
                 ..Default::default()
@@ -577,5 +590,18 @@ pub fn zes_string(buf: &[c_char]) -> Option<String> {
         None
     } else {
         Some(s)
+    }
+}
+
+#[cfg(test)]
+mod abi_tests {
+    use super::*;
+    #[test]
+    fn pci_properties_uses_8_bit_ze_bool() {
+        assert_eq!(std::mem::size_of::<ZesPciProperties>(), 56);
+        assert_eq!(
+            std::mem::offset_of!(ZesPciProperties, have_replay_counters),
+            50
+        );
     }
 }

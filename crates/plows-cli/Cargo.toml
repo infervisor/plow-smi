@@ -7,22 +7,19 @@ repository.workspace = true
 license.workspace = true
 description = "Unified Plow SMI CLI — export, monitor, and control GPUs from one binary"
 
+[features]
+default = []
+tpu = ["plows-exporter/tpu"]
+
 [dependencies]
 plows-exporter = { path = "../plows-exporter", default-features = true, features = ["gpu", "system"] }
 plows-ctl = { path = "../plows-ctl" }
 plows-top = { path = "../plows-top" }
 
 clap = { version = "4", features = ["derive"] }
-axum = "0.8"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
 anyhow = "1"
-thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-colored = "3"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-color-eyre = "0.6"
 
 [[bin]]
 name = "plow-smi"

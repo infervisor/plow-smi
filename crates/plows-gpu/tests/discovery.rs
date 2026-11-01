@@ -245,6 +245,31 @@ fn candidate_lists_are_non_empty() {
 fn live_nvml_load_smoke() {
     let api = plows_gpu::ffi::nvml::NvmlApi::load().expect("NVML load");
     api.init().expect("NVML init");
+    let mut backend = plows_gpu::NvidiaBackend::try_load().expect("NVIDIA backend");
+    backend.refresh();
+    assert!(backend.device_count() > 0);
+    let snapshot = backend.snapshot(0).unwrap();
+    assert!(snapshot.memory_total.unwrap() > 0);
+    assert!(snapshot.memory_used.unwrap() <= snapshot.memory_total.unwrap());
+    assert!((0.0..=100.0).contains(&snapshot.utilization.unwrap()));
+    assert!(snapshot.power_usage.unwrap() >= 0.0);
+    let output = std::process::Command::new("nvidia-smi")
+        .args(["--query-compute-apps=pid", "--format=csv,noheader,nounits"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let processes = backend.collect_processes();
+    for pid in String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .filter_map(|s| s.trim().parse::<u32>().ok())
+    {
+        assert!(
+            processes.iter().any(|p| p.pid == pid),
+            "NVML omitted nvidia-smi PID {pid}"
+        );
+    }
+    println!("NVIDIA snapshot: {snapshot:?}; processes: {processes:?}");
 }
 
 #[test]

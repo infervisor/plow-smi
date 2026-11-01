@@ -17,11 +17,16 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 # Shared dependencies across workspace
-sysinfo = "0.36"
+sysinfo = { version = "0.40", default-features = false, features = ["system", "disk", "network", "component"] }
 whoami = "1"
 thiserror = "2"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "signal", "time"] }
 async-trait = "0.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

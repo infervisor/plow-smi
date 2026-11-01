@@ -30,39 +30,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Start the Prometheus metrics exporter server
-    Export {
-        /// Enable NVIDIA GPU metrics
-        #[arg(long)]
-        nvidia: bool,
-
-        /// Enable AMD GPU metrics
-        #[arg(long)]
-        amd: bool,
-
-        /// Enable Intel GPU metrics
-        #[arg(long)]
-        intel: bool,
-
-        /// Enable Apple Silicon GPU, CPU and Neural Engine metrics
-        #[arg(long)]
-        apple: bool,
-
-        /// Enable system metrics (CPU, RAM, disk, network)
-        #[arg(long)]
-        system: bool,
-
-        /// Enable all available collectors
-        #[arg(long)]
-        all: bool,
-
-        /// HTTP listen port
-        #[arg(long, default_value = "9835")]
-        port: u16,
-
-        /// HTTP listen address
-        #[arg(long, default_value = "0.0.0.0")]
-        bind: String,
-    },
+    Export(plows_exporter::config::Config),
 
     /// Interactive terminal GPU monitor (htop for GPUs)
     Top,
@@ -76,6 +44,21 @@ enum Commands {
 
 #[derive(Subcommand)]
 pub enum CtlCommands {
+    /// Read control capabilities and resolved power profiles
+    Capabilities {
+        #[arg(long, default_value = "json")]
+        format: OutputFormat,
+    },
+    /// Apply a profile or settings from JSON on stdin
+    Apply {
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long, default_value = "json")]
+        format: OutputFormat,
+    },
+    /// CPU frequency controls
+    #[command(subcommand)]
+    Cpu(plows_ctl::cli::CpuCommands),
     /// List Apple Silicon devices (read-only)
     AppleList {
         #[arg(long, default_value = "text")]
@@ -242,39 +225,42 @@ pub enum CtlCommands {
 }
 
 fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    let log_level = match &cli.command {
+        Commands::Export(config) => config.log_level.as_str(),
+        _ => "warn",
+    };
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| log_level.into()),
         )
         .init();
 
-    let cli = Cli::parse();
-
     match cli.command {
-        Commands::Export {
-            nvidia,
-            amd,
-            intel,
-            apple,
-            system,
-            all,
-            port,
-            bind,
-        } => cmd_export::run(
-            plows_exporter::collector::gpu::VendorFilter {
-                nvidia,
-                amd,
-                intel,
-                apple,
-            },
-            system,
-            all,
-            port,
-            bind,
-        ),
+        Commands::Export(config) => cmd_export::run(config),
 
         Commands::Top => plows_top::run().map_err(|e| anyhow::anyhow!("{e}")),
 
         Commands::Ctl(ctl) => cmd_ctl::run(ctl),
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn unified_cli_exposes_export_and_control_features() {
+        Cli::command().debug_assert();
+        assert!(Cli::try_parse_from(["plow-smi", "export", "--interval", "0"]).is_err());
+        for args in [
+            vec!["plow-smi", "ctl", "capabilities"],
+            vec!["plow-smi", "ctl", "apply", "--dry-run"],
+            vec!["plow-smi", "ctl", "cpu", "info"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+    }
+    use clap::CommandFactory;
 }

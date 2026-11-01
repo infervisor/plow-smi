@@ -148,6 +148,7 @@ impl GpuBackend for AppleBackend {
 }
 
 /// Convert energy deltas to average watts. Unknown units/reset counters are absent.
+#[cfg(any(test, all(target_os = "macos", target_arch = "aarch64")))]
 pub(crate) fn energy_watts(value: i64, unit: &str, seconds: f64) -> Option<f32> {
     if value < 0 || !seconds.is_finite() || seconds <= 0.0 {
         return None;
@@ -164,6 +165,7 @@ pub(crate) fn energy_watts(value: i64, unit: &str, seconds: f64) -> Option<f32> 
 }
 
 /// Active residency and active-weighted frequency; mismatched tables omit only clocks.
+#[cfg(any(test, all(target_os = "macos", target_arch = "aarch64")))]
 pub(crate) fn residency(
     states: &[(String, i64)],
     frequencies: &[u32],

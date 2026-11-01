@@ -58,11 +58,7 @@ impl SystemMetrics {
                 "Global CPU usage percentage",
                 &[],
             ),
-            cpu_core_count: sys_gauge(
-                "system_cpu_core_count",
-                "Number of physical CPU cores",
-                &[],
-            ),
+            cpu_core_count: sys_gauge("system_cpu_core_count", "Number of physical CPU cores", &[]),
             memory_total_bytes: sys_gauge(
                 "system_memory_total_bytes",
                 "Total system memory in bytes",
@@ -83,26 +79,10 @@ impl SystemMetrics {
                 "Total swap space in bytes",
                 &[],
             ),
-            swap_used_bytes: sys_gauge(
-                "system_swap_used_bytes",
-                "Used swap space in bytes",
-                &[],
-            ),
-            uptime_seconds: sys_gauge(
-                "system_uptime_seconds",
-                "System uptime in seconds",
-                &[],
-            ),
-            process_count: sys_gauge(
-                "system_process_count",
-                "Number of running processes",
-                &[],
-            ),
-            load_average: sys_gauge(
-                "system_load_average",
-                "System load average",
-                &["duration"],
-            ),
+            swap_used_bytes: sys_gauge("system_swap_used_bytes", "Used swap space in bytes", &[]),
+            uptime_seconds: sys_gauge("system_uptime_seconds", "System uptime in seconds", &[]),
+            process_count: sys_gauge("system_process_count", "Number of running processes", &[]),
+            load_average: sys_gauge("system_load_average", "System load average", &["duration"]),
             disk_total_bytes: sys_gauge(
                 "system_disk_total_bytes",
                 "Total disk space in bytes",
@@ -154,6 +134,66 @@ pub static SYSTEM_METRICS: Lazy<SystemMetrics> = Lazy::new(SystemMetrics::new);
 #[cfg(feature = "system")]
 pub fn update_system_metrics(snapshot: &crate::collector::system::SystemSnapshot) {
     let base_labels = &[snapshot.hostname.as_str(), snapshot.device_name.as_str()];
+    let mut previous = PREVIOUS.lock().unwrap_or_else(|e| e.into_inner());
+    let base = || vec![snapshot.hostname.clone(), snapshot.device_name.clone()];
+    let disks = snapshot
+        .disks
+        .iter()
+        .map(|d| {
+            let mut labels = base();
+            labels.extend([
+                d.name.clone(),
+                d.mount_point.clone(),
+                d.file_system.clone(),
+                d.is_removable.to_string(),
+            ]);
+            labels
+        })
+        .collect();
+    prune(
+        &mut previous[0],
+        disks,
+        &[
+            &SYSTEM_METRICS.disk_total_bytes,
+            &SYSTEM_METRICS.disk_available_bytes,
+        ],
+    );
+    let networks = snapshot
+        .networks
+        .iter()
+        .map(|n| {
+            let mut labels = base();
+            labels.extend([n.interface.clone(), n.mac_address.clone()]);
+            labels
+        })
+        .collect();
+    prune(
+        &mut previous[1],
+        networks,
+        &[
+            &SYSTEM_METRICS.network_received_bytes,
+            &SYSTEM_METRICS.network_transmitted_bytes,
+            &SYSTEM_METRICS.network_total_received_bytes,
+            &SYSTEM_METRICS.network_total_transmitted_bytes,
+        ],
+    );
+    let temperatures = snapshot
+        .temperatures
+        .iter()
+        .map(|t| {
+            let mut labels = base();
+            labels.push(t.label.clone());
+            labels
+        })
+        .collect();
+    prune(
+        &mut previous[2],
+        temperatures,
+        &[
+            &SYSTEM_METRICS.component_temperature_celsius,
+            &SYSTEM_METRICS.component_temperature_max_celsius,
+        ],
+    );
 
     SYSTEM_METRICS
         .cpu_usage_percent
@@ -165,6 +205,10 @@ pub fn update_system_metrics(snapshot: &crate::collector::system::SystemSnapshot
             .cpu_core_count
             .with_label_values(base_labels)
             .set(cores as f64);
+    } else {
+        let _ = SYSTEM_METRICS
+            .cpu_core_count
+            .remove_label_values(base_labels);
     }
 
     SYSTEM_METRICS
@@ -274,6 +318,42 @@ pub fn update_system_metrics(snapshot: &crate::collector::system::SystemSnapshot
                 .component_temperature_max_celsius
                 .with_label_values(temp_labels)
                 .set(max);
+        } else {
+            let _ = SYSTEM_METRICS
+                .component_temperature_max_celsius
+                .remove_label_values(temp_labels);
         }
+    }
+}
+
+#[cfg(feature = "system")]
+type LabelSet = std::collections::HashSet<Vec<String>>;
+#[cfg(feature = "system")]
+static PREVIOUS: std::sync::LazyLock<std::sync::Mutex<[LabelSet; 3]>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::array::from_fn(|_| LabelSet::new())));
+
+#[cfg(feature = "system")]
+fn prune(previous: &mut LabelSet, current: LabelSet, gauges: &[&GaugeVec]) {
+    for old in previous.difference(&current) {
+        let labels: Vec<&str> = old.iter().map(String::as_str).collect();
+        for gauge in gauges {
+            let _ = gauge.remove_label_values(&labels);
+        }
+    }
+    *previous = current;
+}
+
+#[cfg(all(test, feature = "system"))]
+mod tests {
+    use super::*;
+    #[test]
+    fn removed_devices_drop_their_series() {
+        use prometheus::core::Collector;
+        let gauge = GaugeVec::new(Opts::new("test_disks", "test"), &["disk"]).unwrap();
+        gauge.with_label_values(&["old"]).set(10.0);
+        gauge.with_label_values(&["new"]).set(20.0);
+        let mut previous = [vec!["old".into()]].into();
+        prune(&mut previous, [vec!["new".into()]].into(), &[&gauge]);
+        assert_eq!(gauge.collect()[0].get_metric().len(), 1);
     }
 }

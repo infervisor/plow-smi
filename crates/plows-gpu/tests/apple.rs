@@ -1,5 +1,7 @@
 //! Optional real-hardware tests; normal CI exercises the backend math without hardware.
-use plows_gpu::{AppleBackend, GpuBackend, Vendor};
+use plows_gpu::Vendor;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+use plows_gpu::{AppleBackend, GpuBackend};
 
 #[test]
 fn vendor_label_is_stable() {

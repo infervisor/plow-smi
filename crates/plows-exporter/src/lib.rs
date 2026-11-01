@@ -9,3 +9,5 @@ pub mod config;
 pub mod error;
 pub mod exporter;
 pub mod metrics;
+
+pub mod server;

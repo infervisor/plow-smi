@@ -71,3 +71,9 @@ impl GpuCollector {
         self.inner.collect_gpu_processes()
     }
 }
+
+impl Default for GpuCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}

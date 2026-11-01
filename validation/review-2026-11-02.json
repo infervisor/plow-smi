@@ -1,0 +1,458 @@
+{
+  "review_started": "2026-11-01",
+  "report_date": "2026-11-02",
+  "baseline_commit": "36ba4b02509db98274b6a2602e372125c0ed4f2e",
+  "implementation": "Uncommitted working-tree changes; no deployment or hardware control changes.",
+  "scope": [
+    "All five Rust crates: GPU backends/FFI, exporters and collectors, controls and profiles, TUI, unified CLI",
+    "NVIDIA, AMD, Intel, Apple and TPU paths; CPU/memory/disk/network/process/sensor telemetry",
+    "JSON contracts, Prometheus metrics, dashboard expressions, Nix release packaging and CI"
+  ],
+  "findings": [
+    {
+      "priority": "high",
+      "area": "Dependencies",
+      "before": "Locked Tokio and LRU versions had reported security/soundness advisories; unnecessary dependencies added size and maintenance exposure.",
+      "implemented": "Updated Tokio and Ratatui/LRU, upgraded sysinfo/libloading/reqwest/crossterm, removed protobuf/paste/color-eyre dependency paths, disabled unused default features. Final audit has zero findings.",
+      "files": [
+        "Cargo.toml",
+        "Cargo.lock"
+      ]
+    },
+    {
+      "priority": "high",
+      "area": "Control discovery and dry-run",
+      "before": "Capability probing called power-limit setters; even a dry run could write to a driver.",
+      "implemented": "Removed setter probes. Capability contract v2 reports available interfaces and limits; actual writes report permission errors. Mock NVML tests verify capabilities/dry-run make no writes.",
+      "files": [
+        "crates/plows-ctl/src/system.rs",
+        "scripts/test_driver_contracts.py"
+      ]
+    },
+    {
+      "priority": "high",
+      "area": "NVML process enumeration",
+      "before": "The insufficient-size code was incorrect and the legacy process symbol could be called with an incompatible structure.",
+      "implemented": "Use the correct return code, bounded count/query retries and v2/v3-compatible symbols; reject invalid or failed buffers. Added ABI and retry regression tests and matched live H100 process IDs against nvidia-smi.",
+      "files": [
+        "crates/plows-gpu/src/ffi/nvml.rs",
+        "crates/plows-gpu/tests/discovery.rs"
+      ]
+    },
+    {
+      "priority": "high",
+      "area": "Control results and inputs",
+      "before": "Failed bulk operations could report success; watts-to-milliwatts conversion could overflow.",
+      "implemented": "Propagate unsuccessful bulk results to a nonzero exit code and validate nonzero/checked multiplication before writes. Mock driver regression tests pass.",
+      "files": [
+        "crates/plows-ctl/src/lib.rs",
+        "crates/plows-ctl/src/nvidia.rs",
+        "crates/plows-ctl/src/amd.rs"
+      ]
+    },
+    {
+      "priority": "medium",
+      "area": "GPU backend correctness",
+      "before": "Failed refreshes retained old telemetry; AMD indexing and Intel Sysman handle/counter assumptions were unsafe or misleading.",
+      "implemented": "Reset cached telemetry each refresh, check AMD frequency bounds, enumerate Sysman drivers separately and match UUIDs, guard Intel counter resets, omit unavailable live metrics. Pair NVML/AMD initialization with successful shutdown.",
+      "files": [
+        "crates/plows-gpu/src/backend",
+        "crates/plows-gpu/src/ffi"
+      ]
+    },
+    {
+      "priority": "medium",
+      "area": "Linux driver discovery",
+      "before": "The baseline Nix binary could not find gpu03 NVML without LD_LIBRARY_PATH.",
+      "implemented": "Added standard multiarch/lib64 driver locations. Updated binaries discover the H100 without an environment override.",
+      "files": [
+        "crates/plows-gpu/src/ffi/dynlib.rs",
+        "crates/plows-gpu/src/loader.rs"
+      ]
+    },
+    {
+      "priority": "medium",
+      "area": "Exporter correctness and cost",
+      "before": "Repeated sysinfo construction and inventory scans increased cost; blocking collection delayed HTTP; standalone and unified exporter paths had diverged.",
+      "implemented": "Reuse system state, refresh slow inventory at most once per five seconds, share one server, run collection/encoding on at most four blocking workers, support IPv6 and both shutdown signals, reject zero intervals and explicitly unsupported features.",
+      "files": [
+        "crates/plows-exporter/src/server.rs",
+        "crates/plows-exporter/src/collector/system.rs",
+        "crates/plows-cli/src/cmd_export.rs"
+      ]
+    },
+    {
+      "priority": "medium",
+      "area": "Prometheus series lifecycle",
+      "before": "Removed system devices and absent optional counters could leave stale series.",
+      "implemented": "Track previous disk/network/sensor labels and remove missing series; regression test covers disappearance.",
+      "files": [
+        "crates/plows-exporter/src/metrics/system_metrics.rs"
+      ]
+    },
+    {
+      "priority": "medium",
+      "area": "TUI and processes",
+      "before": "Process refresh/allocation ran unnecessarily, network rates assumed a fixed interval, UTF-8 slicing could panic, and errors could leave the terminal in raw mode.",
+      "implemented": "Refresh process detail only on its tab, select the top 30 before allocating names, use actual elapsed time and reset-safe counters, truncate by characters, and restore terminal state through RAII. Live PTY tests visit tabs and verify restoration.",
+      "files": [
+        "crates/plows-top/src/app.rs",
+        "crates/plows-top/src/ui.rs",
+        "crates/plows-top/src/lib.rs"
+      ]
+    },
+    {
+      "priority": "medium",
+      "area": "CPU policy controls",
+      "before": "Using policy0 alone could advertise settings unsupported by other CPU policies.",
+      "implemented": "Intersect governors/EPP and common frequency bounds across all policies; synthetic policy regression test passes.",
+      "files": [
+        "crates/plows-ctl/src/cpu.rs"
+      ]
+    },
+    {
+      "priority": "medium",
+      "area": "TPU collection",
+      "before": "HTTP clients were recreated and metric parsing could confuse labels/timestamps or create empty devices.",
+      "implemented": "Pool the client, bound request/connect timeouts, disable proxy/redirects, parse exact chip labels and finite metric values, ignore unknown metrics and support utilization fallback. Parser tests pass.",
+      "files": [
+        "crates/plows-exporter/src/collector/tpu.rs"
+      ]
+    },
+    {
+      "priority": "medium",
+      "area": "CLI consistency and unavailable values",
+      "before": "The unified CLI omitted CPU/capabilities/apply and unavailable list telemetry appeared as zero.",
+      "implemented": "Share these control handlers between binaries, add parser coverage, and represent unavailable telemetry as JSON null/text N/A.",
+      "files": [
+        "crates/plows-ctl/src/cli.rs",
+        "crates/plows-cli/src/main.rs",
+        "crates/plows-ctl/src/list.rs"
+      ]
+    },
+    {
+      "priority": "low",
+      "area": "Build and release footprint",
+      "before": "Unused dependencies/default features and default release settings inflated shipped binaries.",
+      "implemented": "Enable thin LTO, one codegen unit and symbol stripping; trim dependency/features; extend CI with all-feature tests, strict Clippy, dependency audit and mock-driver contracts.",
+      "files": [
+        "Cargo.toml",
+        ".github/workflows/release.yml"
+      ]
+    }
+  ],
+  "dependency_versions": {
+    "tokio": {
+      "before": "1.52.3",
+      "after": "1.54.1"
+    },
+    "sysinfo": {
+      "before": "0.36.1",
+      "after": "0.40.1"
+    },
+    "libloading": {
+      "before": "0.8.9",
+      "after": "0.9.0"
+    },
+    "reqwest": {
+      "before": "0.12.28",
+      "after": "0.13.5"
+    },
+    "ratatui": {
+      "before": "0.29.0",
+      "after": "0.30.2"
+    },
+    "crossterm": {
+      "before": "0.28.1",
+      "after": "0.29.0"
+    },
+    "prometheus": {
+      "before": "0.14.0",
+      "after": "0.14.0"
+    },
+    "lru": {
+      "before": "0.12.5",
+      "after": "0.18.5"
+    },
+    "protobuf": {
+      "before": "3.7.2",
+      "after": null
+    },
+    "paste": {
+      "before": "1.0.15",
+      "after": null
+    },
+    "color-eyre": {
+      "before": "0.6.5",
+      "after": null
+    }
+  },
+  "dependency_audit": {
+    "database": {
+      "advisory-count": 1395,
+      "last-commit": "2295466c4e9df26647fd67d8fa1c705ac2fc7f81",
+      "last-updated": "2026-10-30T12:12:39+01:00"
+    },
+    "lockfile": {
+      "dependency-count": 287
+    },
+    "settings": {
+      "target_arch": [],
+      "target_os": [],
+      "severity": null,
+      "ignore": [],
+      "informational_warnings": [
+        "unmaintained",
+        "unsound",
+        "notice"
+      ]
+    },
+    "vulnerabilities": {
+      "found": false,
+      "count": 0,
+      "list": []
+    },
+    "warnings": {}
+  },
+  "benchmarks": {
+    "method": "scripts/validate-hardware.py, release binaries, GPU plus system exporter, one-second collection interval, approximately 15 seconds per run. CPU time includes startup and shutdown; RSS is sampled once per scrape. Baseline and updated runs are sequential on active hosts.",
+    "platforms": {
+      "mac": {
+        "host": "Apple M4 Pro / aarch64-darwin",
+        "baseline": {
+          "binary_bytes": {
+            "plow-smi": 5353216,
+            "plows-exporter": 3940048,
+            "plows-top": 2861056,
+            "plows-ctl": 3043024
+          },
+          "exporter": {
+            "wall_seconds": 15.501,
+            "cpu_seconds": 0.8767,
+            "peak_sampled_rss_kib": 25600,
+            "peak_threads": null,
+            "scrapes": 13,
+            "scrape_mean_ms": 19.335,
+            "scrape_max_ms": 229.774,
+            "metric_lines": 406
+          },
+          "tui": {
+            "exit_code": 0,
+            "rendered_bytes": 27423,
+            "terminal_restored": true
+          }
+        },
+        "updated": {
+          "binary_bytes": {
+            "plow-smi": 3680000,
+            "plows-exporter": 2601280,
+            "plows-top": 1735792,
+            "plows-ctl": 2167424
+          },
+          "exporter": {
+            "wall_seconds": 15.484,
+            "cpu_seconds": 0.4583,
+            "peak_sampled_rss_kib": 21744,
+            "peak_threads": null,
+            "scrapes": 14,
+            "scrape_mean_ms": 11.64,
+            "scrape_max_ms": 127.576,
+            "metric_lines": 406
+          },
+          "tui": {
+            "exit_code": 0,
+            "rendered_bytes": 27540,
+            "terminal_restored": true
+          }
+        },
+        "reduction_percent": {
+          "binary_bytes": {
+            "plow-smi": 31.26,
+            "plows-exporter": 33.98,
+            "plows-top": 39.33,
+            "plows-ctl": 28.77
+          },
+          "exporter_cpu_seconds": 47.72,
+          "exporter_peak_sampled_rss": 15.06
+        }
+      },
+      "nvidia": {
+        "host": "gpu03 / NVIDIA H100 80GB / x86_64-linux",
+        "baseline": {
+          "binary_bytes": {
+            "plow-smi": 6005664,
+            "plows-exporter": 4367168,
+            "plows-top": 3184960,
+            "plows-ctl": 3264624
+          },
+          "exporter": {
+            "wall_seconds": 15.284,
+            "cpu_seconds": 1.3823,
+            "peak_sampled_rss_kib": 45228,
+            "peak_threads": 18,
+            "scrapes": 14,
+            "scrape_mean_ms": 0.804,
+            "scrape_max_ms": 0.916,
+            "metric_lines": 108
+          },
+          "tui": {
+            "exit_code": 0,
+            "rendered_bytes": 41066,
+            "terminal_restored": true
+          }
+        },
+        "updated": {
+          "binary_bytes": {
+            "plow-smi": 4161576,
+            "plows-exporter": 2895704,
+            "plows-top": 1938776,
+            "plows-ctl": 2296360
+          },
+          "exporter": {
+            "wall_seconds": 15.377,
+            "cpu_seconds": 0.1472,
+            "peak_sampled_rss_kib": 22216,
+            "peak_threads": 4,
+            "scrapes": 15,
+            "scrape_mean_ms": 3.672,
+            "scrape_max_ms": 42.917,
+            "metric_lines": 108
+          },
+          "tui": {
+            "exit_code": 0,
+            "rendered_bytes": 40041,
+            "terminal_restored": true
+          }
+        },
+        "reduction_percent": {
+          "binary_bytes": {
+            "plow-smi": 30.71,
+            "plows-exporter": 33.69,
+            "plows-top": 39.13,
+            "plows-ctl": 29.66
+          },
+          "exporter_cpu_seconds": 89.35,
+          "exporter_peak_sampled_rss": 50.88
+        }
+      }
+    },
+    "interpretation": [
+      "Single short runs are indicative, not statistically controlled performance guarantees.",
+      "Process counts/disks/system sensors now refresh at most once per five seconds; this intentionally reduces work versus the baseline one-second inventory scans. CPU/memory/network/GPU retain the requested interval.",
+      "Linux baseline needed LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu; updated binaries did not.",
+      "H100 exporter mean scrape latency increased from 0.804 ms to 3.672 ms in these samples; report does not claim a latency improvement.",
+      "Metric line counts remained 406 on Mac and 108 on NVIDIA.",
+      "Last source change after benchmark binaries was an Apple helper cfg guard for Linux lint; it does not change runtime behavior."
+    ]
+  },
+  "validation": [
+    {
+      "check": "cargo test --workspace --all-features",
+      "hosts": [
+        "Mac",
+        "gpu03"
+      ],
+      "result": "passed"
+    },
+    {
+      "check": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+      "hosts": [
+        "Mac",
+        "gpu03"
+      ],
+      "result": "passed"
+    },
+    {
+      "check": "cargo clippy -p plows-exporter --no-default-features -- -D warnings",
+      "hosts": [
+        "Mac"
+      ],
+      "result": "passed"
+    },
+    {
+      "check": "cargo fmt --all --check; git diff --check",
+      "result": "passed"
+    },
+    {
+      "check": "cargo audit --deny warnings and final JSON audit",
+      "result": "passed, zero vulnerabilities/warnings"
+    },
+    {
+      "check": "Live Apple snapshot/refresh/shutdown test",
+      "hosts": [
+        "Mac"
+      ],
+      "result": "passed"
+    },
+    {
+      "check": "Live NVML snapshot/process comparison with nvidia-smi",
+      "hosts": [
+        "gpu03"
+      ],
+      "result": "passed"
+    },
+    {
+      "check": "CLI list/info, exporter health/metrics/SIGTERM and PTY tab/terminal restoration",
+      "hosts": [
+        "Mac",
+        "gpu03"
+      ],
+      "result": "passed"
+    },
+    {
+      "check": "Unified exporter IPv6 health/shutdown, invalid interval and unavailable TPU feature errors",
+      "hosts": [
+        "Mac"
+      ],
+      "result": "passed"
+    },
+    {
+      "check": "Read-only capabilities/dry-run behavior and mock control failure/overflow contracts",
+      "hosts": [
+        "Mac (Apple read-only)",
+        "gpu03 (fake NVML)"
+      ],
+      "result": "passed"
+    },
+    {
+      "check": "Python packaging unit tests",
+      "hosts": [
+        "Mac",
+        "gpu03"
+      ],
+      "result": "passed; five packaging cases plus three Linux mock-driver cases"
+    },
+    {
+      "check": "nix flake check and portable release build",
+      "hosts": [
+        "aarch64-darwin"
+      ],
+      "result": "passed"
+    },
+    {
+      "check": "scripts/test-release.py against native portable release archive",
+      "hosts": [
+        "Mac using current Nix Python"
+      ],
+      "result": "passed"
+    },
+    {
+      "check": "Grafana dashboard JSON and metric expression references",
+      "result": "passed static validation"
+    }
+  ],
+  "compatibility_changes": [
+    "Control JSON contract version is now 2: power_limit_settable describes interface/limit availability, not a write-permission probe.",
+    "Missing list temperature/power values are nullable.",
+    "SystemCollector::new now returns Result after the sysinfo upgrade.",
+    "Process/disk/system sensor inventory can lag by up to the next five-second refresh."
+  ],
+  "remaining_coverage_limits": [
+    "AMD, Intel and TPU hardware was unavailable; code review, compilation and relevant tests do not establish live driver compatibility.",
+    "No real GPU power/clock/reset or CPU policy writes were executed on either host. Such writes were tested only where covered by mock/synthetic fixtures.",
+    "Only M4 Pro and H100 hardware was exercised; other GPU generations, multi-GPU/MIG configurations and device hotplug remain unverified.",
+    "Native macOS Nix packaging was exercised; other release architectures and Linux portability containers await CI.",
+    "Legacy NVML process v1-only symbols are deliberately unsupported to avoid an incompatible ABI call.",
+    "A holistic review and passing checks cannot prove absence of further defects."
+  ]
+}

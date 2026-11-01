@@ -26,6 +26,7 @@ pub struct TpuCollector {
     tpu_name: String,
     chip_count: u32,
     metrics_url: String,
+    client: reqwest::Client,
 }
 
 /// Parsed TPU metrics from the runtime endpoint.
@@ -49,6 +50,13 @@ impl TpuCollector {
     /// Create a new TPU collector.
     pub fn new() -> Self {
         Self {
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(5))
+                .connect_timeout(std::time::Duration::from_secs(2))
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("valid TPU HTTP client configuration"),
             hostname: whoami::fallible::hostname().unwrap_or_else(|_| "unknown".to_string()),
             tpu_type: String::new(),
             tpu_name: String::new(),
@@ -66,7 +74,7 @@ impl TpuCollector {
     /// Query GCE metadata API for TPU information.
     async fn fetch_tpu_metadata(&mut self) -> Result<()> {
         // Try to get TPU accelerator type from metadata
-        let client = reqwest::Client::new();
+        let client = &self.client;
 
         // Get accelerator type (e.g., "v4-8", "v5e-4")
         let accel_type = client
@@ -78,7 +86,13 @@ impl TpuCollector {
             .send()
             .await
             .ok()
-            .and_then(|r| if r.status().is_success() { Some(r) } else { None });
+            .and_then(|r| {
+                if r.status().is_success() {
+                    Some(r)
+                } else {
+                    None
+                }
+            });
 
         if let Some(resp) = accel_type {
             if let Ok(text) = resp.text().await {
@@ -93,7 +107,13 @@ impl TpuCollector {
             .send()
             .await
             .ok()
-            .and_then(|r| if r.status().is_success() { Some(r) } else { None });
+            .and_then(|r| {
+                if r.status().is_success() {
+                    Some(r)
+                } else {
+                    None
+                }
+            });
 
         if let Some(resp) = instance_name {
             if let Ok(text) = resp.text().await {
@@ -102,7 +122,7 @@ impl TpuCollector {
         }
 
         // Parse chip count from accelerator type (e.g., "v4-8" -> 8 chips)
-        if let Some(count_str) = self.tpu_type.split('-').last() {
+        if let Some(count_str) = self.tpu_type.split('-').next_back() {
             self.chip_count = count_str.parse::<u32>().unwrap_or(1);
         }
 
@@ -118,12 +138,11 @@ impl TpuCollector {
 
     /// Fetch and parse TPU runtime metrics from the local endpoint.
     async fn fetch_runtime_metrics(&self) -> Result<Vec<(u32, TpuDeviceMetrics)>> {
-        let client = reqwest::Client::new();
-        let response = client
-            .get(&self.metrics_url)
-            .send()
-            .await
-            .map_err(|e| ExporterError::System(format!("TPU metrics endpoint unreachable: {e}")))?;
+        let client = &self.client;
+        let response =
+            client.get(&self.metrics_url).send().await.map_err(|e| {
+                ExporterError::System(format!("TPU metrics endpoint unreachable: {e}"))
+            })?;
 
         if !response.status().is_success() {
             return Err(ExporterError::System(format!(
@@ -162,6 +181,25 @@ impl TpuCollector {
             let chip_id = Self::extract_chip_id(line);
             let Some(chip_id) = chip_id else { continue };
 
+            // Unrelated runtime metrics must not manufacture empty TPU devices.
+            let name = line.split_once('{').map(|(name, _)| name).unwrap_or("");
+            if ![
+                "duty_cycle",
+                "hbm_memory_used",
+                "memory_used_bytes",
+                "hbm_memory_total",
+                "memory_total_bytes",
+                "tensorcore_utilization",
+                "power_watts",
+                "power_draw",
+                "temperature",
+            ]
+            .iter()
+            .any(|known| name.contains(known))
+                || Self::extract_value(line).is_none()
+            {
+                continue;
+            }
             let metrics = device_map.entry(chip_id).or_default();
 
             // Parse known metric names
@@ -201,21 +239,24 @@ impl TpuCollector {
 
     /// Extract chip ID from a Prometheus metric line.
     fn extract_chip_id(line: &str) -> Option<u32> {
-        // Look for chip="N" or chip_id="N" pattern
-        let start = line.find("chip")?;
-        let after = &line[start..];
-        let eq_pos = after.find('=')?;
-        let after_eq = &after[eq_pos + 1..];
-        let after_eq = after_eq.trim_start_matches('"');
-        let end = after_eq.find(|c: char| !c.is_ascii_digit())?;
-        after_eq[..end].parse::<u32>().ok()
+        let labels = line.split_once('{')?.1.split_once('}')?.0;
+        labels.split(',').find_map(|label| {
+            let (name, value) = label.trim().split_once('=')?;
+            matches!(name.trim(), "chip" | "chip_id")
+                .then(|| value.trim().trim_matches('"').parse().ok())
+                .flatten()
+        })
     }
 
     /// Extract the numeric value from a Prometheus metric line.
     fn extract_value(line: &str) -> Option<f64> {
-        // Value is the last space-separated token
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        parts.last()?.parse::<f64>().ok()
+        // An optional timestamp follows the value; never parse it as telemetry.
+        let rest = line.split_once('}')?.1;
+        rest.split_whitespace()
+            .next()?
+            .parse::<f64>()
+            .ok()
+            .filter(|v| v.is_finite() && *v >= 0.0)
     }
 }
 
@@ -234,10 +275,7 @@ impl Collector for TpuCollector {
         }
 
         // Verify the TPU runtime metrics endpoint is reachable
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(5))
-            .build()
-            .map_err(|e| ExporterError::System(format!("HTTP client error: {e}")))?;
+        let client = &self.client;
 
         match client.get(&self.metrics_url).send().await {
             Ok(resp) if resp.status().is_success() => {
@@ -279,16 +317,14 @@ impl Collector for TpuCollector {
             let uuid = format!("tpu-{}-chip-{}", self.tpu_name, chip_id);
             let brand = format!("Google TPU {}", self.tpu_type);
 
-            let mut snapshot = GpuSnapshot::new(
-                *chip_id,
-                "tpu",
-                self.hostname.clone(),
-                brand,
-                uuid,
-            );
+            let mut snapshot =
+                GpuSnapshot::new(*chip_id, "tpu", self.hostname.clone(), brand, uuid);
 
             // Map TPU metrics to GpuSnapshot fields
-            if let Some(duty) = metrics.duty_cycle_percent {
+            if let Some(duty) = metrics
+                .duty_cycle_percent
+                .or(metrics.tensorcore_utilization)
+            {
                 snapshot.gpu_utilization_percent = Some(duty as i64);
             }
 
@@ -319,5 +355,28 @@ impl Collector for TpuCollector {
         }
 
         Ok(snapshots)
+    }
+}
+
+impl Default for TpuCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn labels_and_timestamps_are_parsed_without_confusion() {
+        let line = "tpu_chip_power_watts{host=\"x\",chip_id=\"2\"} 42.5 1700000000";
+        assert_eq!(TpuCollector::extract_chip_id(line), Some(2));
+        assert_eq!(TpuCollector::extract_value(line), Some(42.5));
+        assert_eq!(TpuCollector::extract_value("m{chip=\"0\"} NaN"), None);
+        assert_eq!(TpuCollector::extract_value("m{chip=\"0\"} -1"), None);
+        assert_eq!(
+            TpuCollector::extract_chip_id("tpu_chip_power{host=\"2\"} 1"),
+            None
+        );
     }
 }

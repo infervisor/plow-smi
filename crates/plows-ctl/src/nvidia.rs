@@ -33,9 +33,9 @@ pub fn list_gpus(format: &OutputFormat) -> Result<()> {
             index: i as u32,
             name: device.model,
             uuid: device.uuid,
-            temperature_c: m.temperature.map(|t| t as i64).unwrap_or(0),
-            power_w: m.power_usage.map(|w| w as u64).unwrap_or(0),
-            power_limit_w: m.power_limit.map(|w| w as u64).unwrap_or(0),
+            temperature_c: m.temperature.map(|t| t as i64),
+            power_w: m.power_usage.map(|w| w as u64),
+            power_limit_w: m.power_limit.map(|w| w as u64),
             memory_used: m.memory_used.map(format_bytes).unwrap_or_default(),
             memory_total: m.memory_total.map(format_bytes).unwrap_or_default(),
         });
@@ -62,9 +62,9 @@ pub fn list_gpus(format: &OutputFormat) -> Result<()> {
                     "{:>3} {:30} {:>4}°C {:>5}/{:<5}W {:>16}",
                     e.index.to_string().cyan(),
                     e.name,
-                    e.temperature_c,
-                    e.power_w,
-                    e.power_limit_w,
+                    crate::value_or_na(e.temperature_c),
+                    crate::value_or_na(e.power_w),
+                    crate::value_or_na(e.power_limit_w),
                     format!("{}/{}", e.memory_used, e.memory_total),
                 );
             }
@@ -252,7 +252,10 @@ pub fn set_clocks_all(
 
 pub fn set_power_limit(index: u32, watts: u32, format: &OutputFormat) -> Result<Outcome> {
     let backend = init_backend()?;
-    let milliwatts = watts * 1000;
+    let milliwatts = watts
+        .checked_mul(1000)
+        .filter(|v| *v > 0)
+        .ok_or_else(|| anyhow::anyhow!("power limit must be 1..=4294967 watts"))?;
     if let Ok((min, max)) = backend.power_limit_constraints(index) {
         if milliwatts < min || milliwatts > max {
             bail!(
@@ -418,7 +421,6 @@ pub fn reset_all(format: &OutputFormat) -> Result<Vec<Outcome>> {
             }
         }
     }
-    text_line(format, "✓ All GPUs reset to defaults".to_string());
     emit_all(format, &out)?;
     Ok(out)
 }

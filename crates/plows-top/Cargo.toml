@@ -17,17 +17,17 @@ plows-exporter = { path = "../plows-exporter", default-features = true, features
 plows-gpu = { path = "../plows-gpu" }
 
 # TUI framework
-ratatui = "0.29"
-crossterm = "0.28"
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
+crossterm = "0.29"
 
 # Async runtime (needed to call async collectors)
-tokio = { version = "1", features = ["rt", "macros"] }
+tokio = { workspace = true }
 
 # System info (per-core CPU, etc.)
 sysinfo = { workspace = true }
 
-# Color support
-color-eyre = "0.6"
+# Error reporting
+anyhow = { workspace = true }
 
 # Time formatting
 chrono = "0.4"

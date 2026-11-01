@@ -1,7 +1,5 @@
 //! The real machine: cpufreq sysfs plus the plows-gpu vendor backends.
 
-use std::collections::HashMap;
-
 use plows_gpu::{AmdBackend, AppleBackend, GpuBackend, IntelBackend, NvidiaBackend, PowerLimits};
 
 use crate::apply::PowerControl;
@@ -25,9 +23,6 @@ pub struct SystemControl {
     apple: Option<AppleBackend>,
     /// Cross-vendor index → slot, in `plows-ctl list` order.
     slots: Vec<Slot>,
-    /// Measured once per process: `Ok` if a write of the current limit was
-    /// accepted, else the driver's reason.
-    settable: HashMap<u32, Result<(), String>>,
 }
 
 impl SystemControl {
@@ -58,7 +53,6 @@ impl SystemControl {
             intel,
             apple,
             slots,
-            settable: HashMap::new(),
         }
     }
 
@@ -89,25 +83,17 @@ impl SystemControl {
         }
     }
 
-    /// Write the current limit back: harmless, and the only honest test.
-    fn probe_settable(&mut self, index: u32, slot: Slot) -> Result<(), String> {
-        if let Some(r) = self.settable.get(&index) {
-            return r.clone();
-        }
-        let r = match self.limits(slot).current_mw {
-            Some(cur) => self.write_limit(slot, cur),
-            None if matches!(slot, Slot::Apple(_)) => {
-                Err("Apple Silicon is read-only; power and clock control are unsupported".into())
-            }
-            None => Err("the driver does not report the current limit".into()),
-        };
-        self.settable.insert(index, r.clone());
-        r
-    }
-
     fn gpu(&mut self, index: u32, slot: Slot) -> GpuCaps {
-        let settable = self.probe_settable(index, slot);
         let limits = self.limits(slot);
+        let settable = match slot {
+            Slot::Nvidia(_) => self
+                .nvidia
+                .as_ref()
+                .is_some_and(|b| b.supports_power_limit()),
+            Slot::Amd(_) => self.amd.as_ref().is_some_and(|b| b.supports_power_limit()),
+            _ => false,
+        } && limits.current_mw.is_some()
+            && limits.max_mw.is_some();
         let (vendor, vi, dev, driver, persistence, perf_levels, perf_level) = match slot {
             Slot::Nvidia(i) => {
                 let b = self.nvidia.as_ref().unwrap();
@@ -183,8 +169,9 @@ impl SystemControl {
             vram_bytes: dev.memory_total,
             driver_version: driver,
             power_limit_mw: limits.into(),
-            power_limit_settable: settable.is_ok(),
-            power_limit_error: settable.err(),
+            power_limit_settable: settable,
+            power_limit_error: (!settable)
+                .then(|| "power limit control unavailable (read-only probe)".into()),
             persistence_mode: persistence,
             perf_levels: perf_levels.into_iter().map(str::to_string).collect(),
             perf_level: perf_level.map(str::to_string),

@@ -94,39 +94,53 @@ impl CpuFreq {
     /// Read everything. `None` when the machine has no cpufreq at all.
     pub fn read(&self) -> Option<CpuCaps> {
         let policies = self.policies();
-        let first = policies.first()?;
-        let mut available_frequencies_khz: Vec<u64> = words(first, "scaling_available_frequencies")
-            .iter()
-            .filter_map(|w| w.parse().ok())
-            .collect();
+        policies.first()?;
+        let mut available_frequencies_khz: Vec<u64> =
+            common_words(&policies, "scaling_available_frequencies")
+                .iter()
+                .filter_map(|w| w.parse().ok())
+                .collect();
         available_frequencies_khz.sort_unstable_by(|a, b| b.cmp(a));
         available_frequencies_khz.dedup();
-
-        // Boost frequencies above the listed steps cannot be set as a max
-        // under drivers that publish steps, so the list bounds the range.
-        let (hw_min_khz, hw_max_khz) = if available_frequencies_khz.is_empty() {
-            (
-                num(first, "cpuinfo_min_freq"),
-                num(first, "cpuinfo_max_freq"),
-            )
-        } else {
-            (
-                available_frequencies_khz.last().copied(),
-                available_frequencies_khz.first().copied(),
-            )
-        };
+        let ranges: Option<Vec<(u64, u64)>> = policies
+            .iter()
+            .map(|p| {
+                let steps: Vec<u64> = words(p, "scaling_available_frequencies")
+                    .iter()
+                    .filter_map(|s| s.parse().ok())
+                    .collect();
+                Some((
+                    steps
+                        .iter()
+                        .min()
+                        .copied()
+                        .or_else(|| num(p, "cpuinfo_min_freq"))?,
+                    steps
+                        .iter()
+                        .max()
+                        .copied()
+                        .or_else(|| num(p, "cpuinfo_max_freq"))?,
+                ))
+            })
+            .collect();
+        let range = ranges.and_then(|r| {
+            let lo = r.iter().map(|r| r.0).max()?;
+            let hi = r.iter().map(|r| r.1).min()?;
+            (lo <= hi).then_some((lo, hi))
+        });
+        let (hw_min_khz, hw_max_khz) = range.map_or((None, None), |(lo, hi)| (Some(lo), Some(hi)));
 
         Some(CpuCaps {
-            driver: text(first, "scaling_driver"),
+            driver: uniform(&policies, |p| text(p, "scaling_driver")),
             policies: policies.len(),
-            available_governors: words(first, "scaling_available_governors"),
+            available_governors: common_words(&policies, "scaling_available_governors"),
             governor: uniform(&policies, |p| text(p, "scaling_governor")),
             hw_min_khz,
             hw_max_khz,
             max_freq_khz: uniform(&policies, |p| num(p, "scaling_max_freq")),
             available_frequencies_khz,
             epp: uniform(&policies, |p| text(p, "energy_performance_preference")),
-            available_epp: words(first, "energy_performance_available_preferences"),
+            available_epp: common_words(&policies, "energy_performance_available_preferences"),
             rapl: self.rapl(),
         })
     }
@@ -209,6 +223,18 @@ fn words(dir: &Path, file: &str) -> Vec<String> {
     text(dir, file)
         .map(|s| s.split_whitespace().map(str::to_string).collect())
         .unwrap_or_default()
+}
+
+fn common_words(policies: &[PathBuf], file: &str) -> Vec<String> {
+    let Some(first) = policies.first() else {
+        return vec![];
+    };
+    let mut common = words(first, file);
+    for policy in &policies[1..] {
+        let available = words(policy, file);
+        common.retain(|value| available.contains(value));
+    }
+    common
 }
 
 /// The value every policy agrees on, or `None`.
@@ -400,5 +426,42 @@ pub(crate) mod tests {
                 },
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod heterogeneous_tests {
+    use super::tests::FakeSys;
+    #[test]
+    fn capabilities_intersect_every_policy() {
+        let sys = FakeSys::new("heterogeneous");
+        sys.policy(
+            0,
+            &[
+                ("cpuinfo_min_freq", "800000"),
+                ("cpuinfo_max_freq", "5000000"),
+                ("scaling_available_governors", "performance powersave"),
+                (
+                    "energy_performance_available_preferences",
+                    "power performance",
+                ),
+            ],
+        );
+        sys.policy(
+            1,
+            &[
+                ("cpuinfo_min_freq", "1000000"),
+                ("cpuinfo_max_freq", "3000000"),
+                ("scaling_available_governors", "powersave"),
+                ("energy_performance_available_preferences", "power"),
+            ],
+        );
+        let caps = sys.cpu().read().unwrap();
+        assert_eq!(
+            (caps.hw_min_khz, caps.hw_max_khz),
+            (Some(1000000), Some(3000000))
+        );
+        assert_eq!(caps.available_governors, ["powersave"]);
+        assert_eq!(caps.available_epp, ["power"]);
     }
 }

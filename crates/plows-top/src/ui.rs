@@ -15,7 +15,7 @@
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Color, Modifier, Style},
     symbols,
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Gauge, Paragraph, Sparkline, Tabs},
@@ -567,7 +567,11 @@ fn draw_gpu_overview(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(block.title(Line::from(title)), area);
 
     for (row, i) in (start..end).enumerate() {
-        let row_area = Rect { y: inner.y + row as u16, height: 1, ..inner };
+        let row_area = Rect {
+            y: inner.y + row as u16,
+            height: 1,
+            ..inner
+        };
         if row_area.y >= inner.bottom() {
             break;
         }
@@ -577,7 +581,11 @@ fn draw_gpu_overview(frame: &mut Frame, app: &App, area: Rect) {
 
 /// Rows a GPU needs in the full overview layout.
 fn gpu_full_height(gpu: &plows_exporter::collector::GpuSnapshot) -> u16 {
-    if gpu.vendor == "apple" { 6 } else { 3 }
+    if gpu.vendor == "apple" {
+        6
+    } else {
+        3
+    }
 }
 
 fn vendor_color(vendor: &str) -> Color {
@@ -618,10 +626,8 @@ fn draw_gpu_compact_row(
     let power_text = format!(" {power_w:>4}W");
 
     // Split what's left between the two bars; each is `XXX[bar text]`.
-    let fixed = prefix.chars().count()
-        + vendor_tag.len()
-        + temp_text.chars().count()
-        + power_text.len();
+    let fixed =
+        prefix.chars().count() + vendor_tag.len() + temp_text.chars().count() + power_text.len();
     let half = (area.width as usize).saturating_sub(fixed) / 2;
     let util_bar = half.saturating_sub(5 + util_text.len());
     let mem_bar = half.saturating_sub(6 + mem_text.len());
@@ -631,7 +637,9 @@ fn draw_gpu_compact_row(
     let line = Line::from(vec![
         Span::styled(
             prefix,
-            Style::default().fg(if selected { CYAN } else { WHITE }).bold(),
+            Style::default()
+                .fg(if selected { CYAN } else { WHITE })
+                .bold(),
         ),
         Span::styled(vendor_tag, Style::default().fg(vendor_color(gpu.vendor))),
         Span::styled("GPU", Style::default().fg(GREEN)),
@@ -693,10 +701,7 @@ fn draw_gpu_row(
                 .bold(),
         ),
         Span::styled(" ", Style::default()),
-        Span::styled(
-            vendor_tag,
-            Style::default().fg(vendor_color(gpu.vendor)),
-        ),
+        Span::styled(vendor_tag, Style::default().fg(vendor_color(gpu.vendor))),
         Span::styled(" │ ", Style::default().fg(DARK_GRAY)),
         Span::styled(truncate_str(&gpu.brand, 24), Style::default().fg(WHITE)),
         Span::styled(" │ ", Style::default().fg(DARK_GRAY)),
@@ -1390,10 +1395,25 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 
 /// Truncate a string to max len with ellipsis.
 fn truncate_str(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
+    if s.chars().count() <= max_len {
+        s.to_owned()
+    } else if max_len == 0 {
+        String::new()
     } else {
-        format!("{}…", &s[..max_len.saturating_sub(1)])
+        s.chars()
+            .take(max_len - 1)
+            .chain(std::iter::once('…'))
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod unicode_tests {
+    #[test]
+    fn truncate_unicode_without_splitting_utf8() {
+        assert_eq!(super::truncate_str("日本語プロセス", 3), "日本…");
+        assert_eq!(super::truncate_str("éclair", 0), "");
+        assert_eq!(super::truncate_str("éclair", 1), "…");
     }
 }
 

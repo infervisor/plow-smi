@@ -9,6 +9,9 @@ const TEXT: &plows_ctl::OutputFormat = &plows_ctl::OutputFormat::Text;
 
 pub fn run(cmd: CtlCommands) -> Result<()> {
     match cmd {
+        CtlCommands::Capabilities { format } => plows_ctl::cli::run_capabilities(&format),
+        CtlCommands::Apply { dry_run, format } => plows_ctl::cli::run_apply(dry_run, &format),
+        CtlCommands::Cpu(command) => plows_ctl::cli::run_cpu(command),
         CtlCommands::AppleList { format } => plows_ctl::apple::list_gpus(&format),
         CtlCommands::AppleInfo { gpu, format } => plows_ctl::apple::gpu_info(gpu, &format),
         CtlCommands::List { format } => plows_ctl::list::list_all(&format),

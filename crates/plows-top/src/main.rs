@@ -19,7 +19,7 @@ use clap::Parser;
 #[command(name = "plows-top", version, about = "Terminal GPU & system monitor")]
 struct Cli {}
 
-fn main() -> color_eyre::Result<()> {
+fn main() -> anyhow::Result<()> {
     // Handle --help/--version before opening a terminal, including in CI.
     Cli::parse();
     plows_top::run()
@@ -37,7 +37,10 @@ mod tests {
             ("--version", ErrorKind::DisplayVersion),
         ] {
             assert_eq!(
-                Cli::try_parse_from(["plows-top", flag]).err().unwrap().kind(),
+                Cli::try_parse_from(["plows-top", flag])
+                    .err()
+                    .unwrap()
+                    .kind(),
                 kind
             );
         }

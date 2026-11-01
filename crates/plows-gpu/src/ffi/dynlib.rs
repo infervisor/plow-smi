@@ -8,7 +8,7 @@ use crate::error::{GpuError, Result};
 pub fn open_first(candidates: &[&str]) -> Result<Library> {
     let mut last_err = String::new();
     for path in candidates {
-        match unsafe { Library::new(path) } {
+        match unsafe { Library::new(*path) } {
             Ok(lib) => return Ok(lib),
             Err(e) => {
                 last_err = e.to_string();
@@ -61,6 +61,11 @@ pub fn nvml_candidates() -> &'static [&'static str] {
         "libnvidia-ml.so.1",
         "libnvidia-ml.so",
         "/run/opengl-driver/lib/libnvidia-ml.so.1",
+        "/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1",
+        "/usr/lib/aarch64-linux-gnu/libnvidia-ml.so.1",
+        "/usr/lib64/libnvidia-ml.so.1",
+        "/usr/lib/libnvidia-ml.so.1",
+        "/usr/local/nvidia/lib64/libnvidia-ml.so.1",
         #[cfg(target_os = "windows")]
         "nvml.dll",
     ]
@@ -106,7 +111,7 @@ const HOST_LIB_DIRS: &[&str] = &[
 pub fn preload(sonames: &[&str]) -> Vec<Library> {
     let mut loaded = Vec::new();
     for soname in sonames {
-        let found = unsafe { Library::new(soname) }.ok().or_else(|| {
+        let found = unsafe { Library::new(*soname) }.ok().or_else(|| {
             HOST_LIB_DIRS
                 .iter()
                 .map(|d| std::path::Path::new(d).join(soname))
@@ -127,6 +132,10 @@ pub fn level_zero_candidates() -> &'static [&'static str] {
         "libze_loader.so.1",
         "libze_loader.so",
         "/run/opengl-driver/lib/libze_loader.so.1",
+        "/usr/lib/x86_64-linux-gnu/libze_loader.so.1",
+        "/usr/lib/aarch64-linux-gnu/libze_loader.so.1",
+        "/usr/lib64/libze_loader.so.1",
+        "/usr/lib/libze_loader.so.1",
         #[cfg(target_os = "windows")]
         "ze_loader.dll",
     ]

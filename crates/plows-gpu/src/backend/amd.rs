@@ -77,7 +77,9 @@ impl GpuBackend for AmdBackend {
     }
 
     fn driver_version(&self) -> Option<String> {
-        self.slots.first().and_then(|s| self.api.driver_version(s.handle))
+        self.slots
+            .first()
+            .and_then(|s| self.api.driver_version(s.handle))
     }
 
     fn devices(&self) -> Vec<GpuDevice> {
@@ -86,6 +88,7 @@ impl GpuBackend for AmdBackend {
 
     fn refresh(&mut self) {
         for slot in &mut self.slots {
+            slot.metrics = CachedMetrics::default();
             let h = slot.handle;
             slot.metrics.utilization = self.api.gpu_busy_percent(h);
             let (total, used) = self.api.memory_bytes(h);
@@ -152,6 +155,11 @@ impl GpuBackend for AmdBackend {
 }
 
 impl AmdBackend {
+    /// Whether the loaded driver exports a power-limit setter.
+    pub fn supports_power_limit(&self) -> bool {
+        self.api.supports_power_limit()
+    }
+
     fn handle_at(&self, index: u32) -> Result<ProcessorHandle> {
         self.slots
             .get(index as usize)

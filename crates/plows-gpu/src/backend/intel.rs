@@ -8,15 +8,14 @@ use crate::backend::CachedMetrics;
 use crate::device::{GpuDevice, Vendor};
 use crate::error::{GpuError, Result};
 use crate::ffi::levelzero::{
-    format_uuid, props_name, zes_string, LevelZeroApi, ZeDeviceHandle, ZeDriverHandle,
-    ZesDeviceHandle, ZesEngineStats, ZesPowerEnergyCounter,
+    format_uuid, props_name, zes_string, LevelZeroApi, ZeDriverHandle, ZesDeviceHandle,
+    ZesEngineStats, ZesPowerEnergyCounter,
 };
 use crate::metrics::GpuBackend;
 
 struct IntelSlot {
     #[allow(dead_code)]
     driver: ZeDriverHandle,
-    device: ZeDeviceHandle,
     zes: Option<ZesDeviceHandle>,
     identity: GpuDevice,
     metrics: CachedMetrics,
@@ -44,37 +43,25 @@ impl IntelBackend {
         let mut slots = Vec::with_capacity(devices.len());
         for (index, (driver, device)) in devices.into_iter().enumerate() {
             let props = api.device_properties(device);
-            let (mut model, uuid, total_hint) = if let Some(ref p) = props {
+            let (mut model, uuid) = if let Some(ref p) = props {
                 let name = props_name(p);
                 let model = if name.is_empty() {
                     format!("Intel GPU {index}")
                 } else {
                     name
                 };
-                (
-                    model,
-                    format_uuid(&p.uuid),
-                    if p.max_mem_alloc_size > 0 {
-                        Some(p.max_mem_alloc_size)
-                    } else {
-                        None
-                    },
-                )
+                (model, format_uuid(&p.uuid))
             } else {
-                (
-                    format!("Intel GPU {index}"),
-                    format!("intel-gpu-{index}"),
-                    None,
-                )
+                (format!("Intel GPU {index}"), format!("intel-gpu-{index}"))
             };
 
-            let zes = api.sysman_device(driver, index as u32);
+            let zes = props.as_ref().and_then(|p| api.sysman_device(&p.uuid));
             let mut identity = GpuDevice::new(Vendor::Intel, index, uuid, model.clone());
-            identity.memory_total = total_hint;
 
             if let Some(zes_h) = zes {
                 if let Some(sp) = api.sysman_device_properties(zes_h) {
-                    if let Some(m) = zes_string(&sp.model_name).or_else(|| zes_string(&sp.brand_name))
+                    if let Some(m) =
+                        zes_string(&sp.model_name).or_else(|| zes_string(&sp.brand_name))
                     {
                         model = m;
                         identity.model = model;
@@ -86,7 +73,6 @@ impl IntelBackend {
 
             slots.push(IntelSlot {
                 driver,
-                device,
                 zes,
                 identity,
                 metrics: CachedMetrics::default(),
@@ -122,12 +108,7 @@ impl GpuBackend for IntelBackend {
 
     fn refresh(&mut self) {
         for slot in &mut self.slots {
-            if let Some(props) = self.api.device_properties(slot.device) {
-                if props.core_clock_rate > 0 {
-                    slot.metrics.clock_graphics = Some(props.core_clock_rate);
-                }
-            }
-
+            slot.metrics = CachedMetrics::default();
             let Some(zes) = slot.zes else {
                 continue;
             };
@@ -149,7 +130,7 @@ impl GpuBackend for IntelBackend {
                 if let Some(prev) = slot.prev_energy {
                     let de = cur.energy.saturating_sub(prev.energy) as f64; // µJ
                     let dt = cur.timestamp.saturating_sub(prev.timestamp) as f64; // µs
-                    if dt > 0.0 {
+                    if dt > 0.0 && cur.energy >= prev.energy {
                         // µJ / µs = W
                         slot.metrics.power_usage = Some((de / dt) as f32);
                     }
@@ -162,7 +143,7 @@ impl GpuBackend for IntelBackend {
                 if let Some(prev) = slot.prev_engine {
                     let da = cur.active_time.saturating_sub(prev.active_time) as f64;
                     let dt = cur.timestamp.saturating_sub(prev.timestamp) as f64;
-                    if dt > 0.0 {
+                    if dt > 0.0 && cur.active_time >= prev.active_time {
                         let pct = (100.0 * da / dt).clamp(0.0, 100.0) as f32;
                         slot.metrics.utilization = Some(pct);
                     }

@@ -1,12 +1,13 @@
 //! Application state management — rich state for htop-like display.
 
 use std::cell::Cell;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
+use std::time::Instant;
 
-use sysinfo::{Pid, ProcessesToUpdate, System};
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
-use plows_exporter::collector::GpuSnapshot;
 use plows_exporter::collector::system::SystemSnapshot;
+use plows_exporter::collector::GpuSnapshot;
 
 use crate::gpu::GpuCollector;
 use crate::system::SystemCollector;
@@ -79,6 +80,7 @@ pub struct App {
     pub net_tx_rate: u64,
     last_net_rx: u64,
     last_net_tx: u64,
+    last_network_sample: Instant,
 
     // --- Processes ---
     pub processes: Vec<ProcessEntry>,
@@ -98,9 +100,9 @@ pub struct App {
 
 impl App {
     /// Create and initialize the app state.
-    pub fn new() -> Self {
+    pub fn new() -> anyhow::Result<Self> {
         let gpu_collector = GpuCollector::new();
-        let sys_collector = SystemCollector::new();
+        let sys_collector = SystemCollector::new()?;
 
         let gpus = gpu_collector.collect();
         let system = sys_collector.collect();
@@ -109,9 +111,9 @@ impl App {
         let driver_version = gpu_collector.driver_version.clone();
         let cuda_version = gpu_collector.cuda_version.clone();
 
-        let mut sysinfo = System::new_all();
-        sysinfo.refresh_cpu_all();
-        let per_core_usage: Vec<f32> = sysinfo.cpus().iter().map(|c| c.cpu_usage()).collect();
+        let mut sysinfo = System::new()?;
+        sysinfo.refresh_cpu_usage();
+        let per_core_usage: Vec<f32> = sysinfo.cpus().iter().map(|c| c.usage()).collect();
         let cpu_count = sysinfo.cpus().len();
 
         let gpu_util_history = vec![VecDeque::with_capacity(HISTORY_LEN); device_count as usize];
@@ -120,14 +122,12 @@ impl App {
         let gpu_power_history = vec![VecDeque::with_capacity(HISTORY_LEN); device_count as usize];
 
         // Initial network totals
-        let (last_net_rx, last_net_tx) = system
-            .networks
-            .iter()
-            .fold((0u64, 0u64), |(rx, tx), n| {
+        let (last_net_rx, last_net_tx) =
+            system.networks.iter().fold((0u64, 0u64), |(rx, tx), n| {
                 (rx + n.total_received_bytes, tx + n.total_transmitted_bytes)
             });
 
-        Self {
+        Ok(Self {
             gpu_collector,
             sys_collector,
             sysinfo,
@@ -152,6 +152,7 @@ impl App {
             net_tx_rate: 0,
             last_net_rx,
             last_net_tx,
+            last_network_sample: Instant::now(),
             processes: Vec::new(),
             running: true,
             tick_count: 0,
@@ -161,7 +162,7 @@ impl App {
             overview_focus: OverviewFocus::Gpu,
             cpu_scroll: 0,
             cpu_scroll_max: Cell::new(0),
-        }
+        })
     }
 
     /// Refresh all metrics.
@@ -177,8 +178,8 @@ impl App {
         self.tick_count += 1;
 
         // Refresh per-core CPU
-        self.sysinfo.refresh_cpu_all();
-        self.per_core_usage = self.sysinfo.cpus().iter().map(|c| c.cpu_usage()).collect();
+        self.sysinfo.refresh_cpu_usage();
+        self.per_core_usage = self.sysinfo.cpus().iter().map(|c| c.usage()).collect();
 
         // CPU history
         push_history(&mut self.cpu_history, self.system.cpu_usage_percent);
@@ -192,11 +193,18 @@ impl App {
         push_history(&mut self.mem_history, mem_pct);
 
         // Network rates
-        let (cur_rx, cur_tx) = self.system.networks.iter().fold((0u64, 0u64), |(rx, tx), n| {
-            (rx + n.total_received_bytes, tx + n.total_transmitted_bytes)
-        });
-        self.net_rx_rate = cur_rx.saturating_sub(self.last_net_rx);
-        self.net_tx_rate = cur_tx.saturating_sub(self.last_net_tx);
+        let (cur_rx, cur_tx) = self
+            .system
+            .networks
+            .iter()
+            .fold((0u64, 0u64), |(rx, tx), n| {
+                (rx + n.total_received_bytes, tx + n.total_transmitted_bytes)
+            });
+        let now = Instant::now();
+        let seconds = now.duration_since(self.last_network_sample).as_secs_f64();
+        self.net_rx_rate = byte_rate(cur_rx, self.last_net_rx, seconds);
+        self.net_tx_rate = byte_rate(cur_tx, self.last_net_tx, seconds);
+        self.last_network_sample = now;
         self.last_net_rx = cur_rx;
         self.last_net_tx = cur_tx;
 
@@ -204,10 +212,7 @@ impl App {
             &mut self.net_rx_history,
             self.net_rx_rate as f64 / 1024.0, // KB/s
         );
-        push_history(
-            &mut self.net_tx_history,
-            self.net_tx_rate as f64 / 1024.0,
-        );
+        push_history(&mut self.net_tx_history, self.net_tx_rate as f64 / 1024.0);
 
         // GPU histories
         for (i, gpu) in self.gpus.iter().enumerate() {
@@ -221,17 +226,16 @@ impl App {
                 let temp = gpu.temperature_celsius.unwrap_or(0) as f64;
                 push_history(&mut self.gpu_temp_history[i], temp);
 
-                let power_pct = if let (Some(usage), Some(limit)) =
-                    (gpu.power_usage_mw, gpu.power_limit_mw)
-                {
-                    if limit > 0 {
-                        (usage as f64 / limit as f64) * 100.0
+                let power_pct =
+                    if let (Some(usage), Some(limit)) = (gpu.power_usage_mw, gpu.power_limit_mw) {
+                        if limit > 0 {
+                            (usage as f64 / limit as f64) * 100.0
+                        } else {
+                            0.0
+                        }
                     } else {
                         0.0
-                    }
-                } else {
-                    0.0
-                };
+                    };
                 push_history(&mut self.gpu_power_history[i], power_pct);
             }
         }
@@ -247,7 +251,10 @@ impl App {
     /// Select previous GPU.
     pub fn prev_gpu(&mut self) {
         if !self.gpus.is_empty() {
-            self.selected_gpu = self.selected_gpu.checked_sub(1).unwrap_or(self.gpus.len() - 1);
+            self.selected_gpu = self
+                .selected_gpu
+                .checked_sub(1)
+                .unwrap_or(self.gpus.len() - 1);
         }
     }
 
@@ -279,10 +286,17 @@ impl App {
 
         // GPU processes
         let gpu_procs = self.gpu_collector.collect_processes();
-        let gpu_pids: Vec<u32> = gpu_procs.iter().map(|p| p.pid).collect();
+        let gpu_pids: HashSet<u32> = gpu_procs.iter().map(|p| p.pid).collect();
 
         // Refresh sysinfo processes for the GPU pids to get names/cpu/mem
-        self.sysinfo.refresh_processes(ProcessesToUpdate::All, true);
+        self.sysinfo.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing()
+                .without_tasks()
+                .with_cpu()
+                .with_memory(),
+        );
 
         for gp in &gpu_procs {
             let (name, cpu, mem) = if let Some(proc) = self.sysinfo.process(Pid::from_u32(gp.pid)) {
@@ -307,27 +321,28 @@ impl App {
         }
 
         // Top CPU processes (sorted by CPU%, top 30 non-GPU)
-        let mut sys_procs: Vec<ProcessEntry> = self
+        let mut sys_procs: Vec<_> = self
             .sysinfo
             .processes()
             .iter()
             .filter(|(pid, _)| !gpu_pids.contains(&pid.as_u32()))
-            .map(|(pid, proc)| ProcessEntry {
-                pid: pid.as_u32(),
-                name: proc.name().to_string_lossy().to_string(),
-                cpu_percent: proc.cpu_usage(),
-                mem_bytes: proc.memory(),
-                gpu_index: None,
-                gpu_mem_bytes: 0,
-                proc_type: "CPU".to_string(),
-            })
             .collect();
-
-        sys_procs.sort_by(|a, b| b.cpu_percent.partial_cmp(&a.cpu_percent).unwrap_or(std::cmp::Ordering::Equal));
-        sys_procs.truncate(30);
-
-        // GPU processes first, then top CPU processes
-        entries.extend(sys_procs);
+        if sys_procs.len() > 30 {
+            sys_procs.select_nth_unstable_by(30, |(_, a), (_, b)| {
+                b.cpu_usage().total_cmp(&a.cpu_usage())
+            });
+            sys_procs.truncate(30);
+        }
+        // Allocate names only for the entries that will actually be displayed.
+        entries.extend(sys_procs.into_iter().map(|(pid, proc)| ProcessEntry {
+            pid: pid.as_u32(),
+            name: proc.name().to_string_lossy().into_owned(),
+            cpu_percent: proc.cpu_usage(),
+            mem_bytes: proc.memory(),
+            gpu_index: None,
+            gpu_mem_bytes: 0,
+            proc_type: "CPU".into(),
+        }));
 
         // Sort final list: GPU processes at top (sorted by GPU mem), then CPU (sorted by CPU%)
         entries.sort_by(|a, b| {
@@ -336,7 +351,10 @@ impl App {
                 (true, false) => std::cmp::Ordering::Less,
                 (false, true) => std::cmp::Ordering::Greater,
                 (true, true) => b.gpu_mem_bytes.cmp(&a.gpu_mem_bytes),
-                (false, false) => b.cpu_percent.partial_cmp(&a.cpu_percent).unwrap_or(std::cmp::Ordering::Equal),
+                (false, false) => b
+                    .cpu_percent
+                    .partial_cmp(&a.cpu_percent)
+                    .unwrap_or(std::cmp::Ordering::Equal),
             }
         });
 
@@ -387,4 +405,24 @@ fn push_history(deque: &mut VecDeque<f64>, value: f64) {
         deque.pop_front();
     }
     deque.push_back(value);
+}
+
+fn byte_rate(current: u64, previous: u64, seconds: f64) -> u64 {
+    if seconds > 0.0 {
+        (current.saturating_sub(previous) as f64 / seconds) as u64
+    } else {
+        0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn network_rates_use_elapsed_time_and_handle_resets() {
+        assert_eq!(byte_rate(3000, 1000, 2.0), 1000);
+        assert_eq!(byte_rate(3000, 1000, 0.5), 4000);
+        assert_eq!(byte_rate(0, 1000, 1.0), 0);
+        assert_eq!(byte_rate(1000, 0, 0.0), 0);
+    }
 }

@@ -11,7 +11,7 @@ use crate::cpu::CpuCaps;
 use crate::profile::{Profile, Resolution};
 
 /// Version of the `capabilities` / `apply` JSON contract.
-pub const CONTRACT_VERSION: u32 = 1;
+pub const CONTRACT_VERSION: u32 = 2;
 
 /// A GPU's power limits in milliwatts. `None` means "not reported", never 0.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,8 +47,8 @@ pub struct GpuCaps {
     pub vram_bytes: Option<u64>,
     pub driver_version: Option<String>,
     pub power_limit_mw: PowerLimitsMw,
-    /// Measured: a write of the current limit was accepted. The constraints
-    /// query succeeding does not mean a write will be.
+    /// The setter and limit queries are available. This read-only capability
+    /// check does not prove write permission; apply reports driver errors.
     pub power_limit_settable: bool,
     /// Why a write of the current limit was refused, when it was.
     #[serde(default, skip_serializing_if = "Option::is_none")]

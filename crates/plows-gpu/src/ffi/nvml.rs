@@ -12,6 +12,7 @@ pub type NvmlDevice = *mut std::ffi::c_void;
 
 /// NVML return codes of interest.
 const NVML_SUCCESS: u32 = 0;
+const NVML_ERROR_INSUFFICIENT_SIZE: u32 = 7;
 
 /// Temperature sensor: GPU die.
 const NVML_TEMPERATURE_GPU: u32 = 0;
@@ -58,6 +59,7 @@ pub struct NvmlProcessInfo {
 
 /// Resolved NVML function pointers. The `_lib` field keeps the mapping alive.
 pub struct NvmlApi {
+    initialized: std::sync::Mutex<bool>,
     nvml_init_v2: unsafe extern "C" fn() -> u32,
     nvml_shutdown: unsafe extern "C" fn() -> u32,
     nvml_device_get_count_v2: unsafe extern "C" fn(*mut c_uint) -> u32,
@@ -67,27 +69,29 @@ pub struct NvmlApi {
     nvml_device_get_serial: unsafe extern "C" fn(NvmlDevice, *mut c_char, c_uint) -> u32,
     nvml_device_get_pci_info_v3: unsafe extern "C" fn(NvmlDevice, *mut NvmlPciInfo) -> u32,
     nvml_device_get_memory_info: unsafe extern "C" fn(NvmlDevice, *mut NvmlMemory) -> u32,
-    nvml_device_get_utilization_rates: unsafe extern "C" fn(NvmlDevice, *mut NvmlUtilization) -> u32,
+    nvml_device_get_utilization_rates:
+        unsafe extern "C" fn(NvmlDevice, *mut NvmlUtilization) -> u32,
     nvml_device_get_temperature: unsafe extern "C" fn(NvmlDevice, u32, *mut c_uint) -> u32,
     nvml_device_get_power_usage: unsafe extern "C" fn(NvmlDevice, *mut c_uint) -> u32,
-    nvml_device_get_enforced_power_limit: Option<unsafe extern "C" fn(NvmlDevice, *mut c_uint) -> u32>,
+    nvml_device_get_enforced_power_limit:
+        Option<unsafe extern "C" fn(NvmlDevice, *mut c_uint) -> u32>,
     nvml_device_get_fan_speed: unsafe extern "C" fn(NvmlDevice, *mut c_uint) -> u32,
     nvml_device_get_clock_info: unsafe extern "C" fn(NvmlDevice, u32, *mut c_uint) -> u32,
     nvml_device_get_architecture: Option<unsafe extern "C" fn(NvmlDevice, *mut u32) -> u32>,
     nvml_system_get_driver_version: Option<unsafe extern "C" fn(*mut c_char, c_uint) -> u32>,
     nvml_system_get_cuda_driver_version: Option<unsafe extern "C" fn(*mut i32) -> u32>,
-    nvml_device_get_compute_running_processes: Option<
-        unsafe extern "C" fn(NvmlDevice, *mut c_uint, *mut NvmlProcessInfo) -> u32,
-    >,
-    nvml_device_get_graphics_running_processes: Option<
-        unsafe extern "C" fn(NvmlDevice, *mut c_uint, *mut NvmlProcessInfo) -> u32,
-    >,
+    nvml_device_get_compute_running_processes:
+        Option<unsafe extern "C" fn(NvmlDevice, *mut c_uint, *mut NvmlProcessInfo) -> u32>,
+    nvml_device_get_graphics_running_processes:
+        Option<unsafe extern "C" fn(NvmlDevice, *mut c_uint, *mut NvmlProcessInfo) -> u32>,
     // Control / query extensions (optional — soft-fail if absent).
-    nvml_device_get_max_clock_info: Option<unsafe extern "C" fn(NvmlDevice, u32, *mut c_uint) -> u32>,
+    nvml_device_get_max_clock_info:
+        Option<unsafe extern "C" fn(NvmlDevice, u32, *mut c_uint) -> u32>,
     nvml_device_get_power_management_limit_constraints:
         Option<unsafe extern "C" fn(NvmlDevice, *mut c_uint, *mut c_uint) -> u32>,
     nvml_device_set_power_management_limit: Option<unsafe extern "C" fn(NvmlDevice, c_uint) -> u32>,
-    nvml_device_get_power_management_limit: Option<unsafe extern "C" fn(NvmlDevice, *mut c_uint) -> u32>,
+    nvml_device_get_power_management_limit:
+        Option<unsafe extern "C" fn(NvmlDevice, *mut c_uint) -> u32>,
     nvml_device_get_power_management_default_limit:
         Option<unsafe extern "C" fn(NvmlDevice, *mut c_uint) -> u32>,
     nvml_device_get_persistence_mode: Option<unsafe extern "C" fn(NvmlDevice, *mut u32) -> u32>,
@@ -102,7 +106,8 @@ pub struct NvmlApi {
     nvml_device_reset_applications_clocks: Option<unsafe extern "C" fn(NvmlDevice) -> u32>,
     nvml_device_get_curr_pcie_link_generation:
         Option<unsafe extern "C" fn(NvmlDevice, *mut c_uint) -> u32>,
-    nvml_device_get_curr_pcie_link_width: Option<unsafe extern "C" fn(NvmlDevice, *mut c_uint) -> u32>,
+    nvml_device_get_curr_pcie_link_width:
+        Option<unsafe extern "C" fn(NvmlDevice, *mut c_uint) -> u32>,
     _lib: Library,
 }
 
@@ -111,6 +116,9 @@ unsafe impl Send for NvmlApi {}
 unsafe impl Sync for NvmlApi {}
 
 impl NvmlApi {
+    pub fn supports_power_limit(&self) -> bool {
+        self.nvml_device_set_power_management_limit.is_some()
+    }
     /// `dlopen` NVML and resolve required symbols.
     pub fn load() -> Result<Self> {
         let candidates = dynlib::nvml_candidates();
@@ -120,6 +128,7 @@ impl NvmlApi {
         // SAFETY: symbol types match the NVML C ABI.
         unsafe {
             Ok(Self {
+                initialized: std::sync::Mutex::new(false),
                 nvml_init_v2: dynlib::resolve_required(&lib, b"nvmlInit_v2\0", library)?,
                 nvml_shutdown: dynlib::resolve_required(&lib, b"nvmlShutdown\0", library)?,
                 nvml_device_get_count_v2: dynlib::resolve_required(
@@ -198,28 +207,20 @@ impl NvmlApi {
                     &lib,
                     b"nvmlSystemGetCudaDriverVersion_v2\0",
                 )
-                .or_else(|| {
-                    dynlib::resolve_optional(&lib, b"nvmlSystemGetCudaDriverVersion\0")
-                }),
+                .or_else(|| dynlib::resolve_optional(&lib, b"nvmlSystemGetCudaDriverVersion\0")),
                 nvml_device_get_compute_running_processes: dynlib::resolve_optional(
                     &lib,
                     b"nvmlDeviceGetComputeRunningProcesses_v3\0",
                 )
                 .or_else(|| {
-                    dynlib::resolve_optional(
-                        &lib,
-                        b"nvmlDeviceGetComputeRunningProcesses\0",
-                    )
+                    dynlib::resolve_optional(&lib, b"nvmlDeviceGetComputeRunningProcesses_v2\0")
                 }),
                 nvml_device_get_graphics_running_processes: dynlib::resolve_optional(
                     &lib,
                     b"nvmlDeviceGetGraphicsRunningProcesses_v3\0",
                 )
                 .or_else(|| {
-                    dynlib::resolve_optional(
-                        &lib,
-                        b"nvmlDeviceGetGraphicsRunningProcesses\0",
-                    )
+                    dynlib::resolve_optional(&lib, b"nvmlDeviceGetGraphicsRunningProcesses_v2\0")
                 }),
                 nvml_device_get_max_clock_info: dynlib::resolve_optional(
                     &lib,
@@ -279,17 +280,26 @@ impl NvmlApi {
     }
 
     pub fn init(&self) -> Result<()> {
+        let mut initialized = self.initialized.lock().unwrap_or_else(|e| e.into_inner());
+        if *initialized {
+            return Ok(());
+        }
         let st = unsafe { (self.nvml_init_v2)() };
         if st != NVML_SUCCESS {
             return Err(GpuError::InitializationFailed(format!(
                 "nvmlInit_v2 returned {st}"
             )));
         }
+        *initialized = true;
         Ok(())
     }
 
     pub fn shutdown(&self) {
-        let _ = unsafe { (self.nvml_shutdown)() };
+        let mut initialized = self.initialized.lock().unwrap_or_else(|e| e.into_inner());
+        if *initialized {
+            let _ = unsafe { (self.nvml_shutdown)() };
+            *initialized = false;
+        }
     }
 
     pub fn device_count(&self) -> Result<u32> {
@@ -316,9 +326,8 @@ impl NvmlApi {
 
     pub fn device_name(&self, device: NvmlDevice) -> Option<String> {
         let mut buf = [0 as c_char; 96];
-        let st = unsafe {
-            (self.nvml_device_get_name)(device, buf.as_mut_ptr(), buf.len() as c_uint)
-        };
+        let st =
+            unsafe { (self.nvml_device_get_name)(device, buf.as_mut_ptr(), buf.len() as c_uint) };
         if st == NVML_SUCCESS {
             Some(c_string_from_buf(unsafe {
                 std::slice::from_raw_parts(buf.as_ptr() as *const u8, buf.len())
@@ -330,9 +339,8 @@ impl NvmlApi {
 
     pub fn device_uuid(&self, device: NvmlDevice) -> Option<String> {
         let mut buf = [0 as c_char; 96];
-        let st = unsafe {
-            (self.nvml_device_get_uuid)(device, buf.as_mut_ptr(), buf.len() as c_uint)
-        };
+        let st =
+            unsafe { (self.nvml_device_get_uuid)(device, buf.as_mut_ptr(), buf.len() as c_uint) };
         if st == NVML_SUCCESS {
             Some(c_string_from_buf(unsafe {
                 std::slice::from_raw_parts(buf.as_ptr() as *const u8, buf.len())
@@ -344,9 +352,8 @@ impl NvmlApi {
 
     pub fn device_serial(&self, device: NvmlDevice) -> Option<String> {
         let mut buf = [0 as c_char; 96];
-        let st = unsafe {
-            (self.nvml_device_get_serial)(device, buf.as_mut_ptr(), buf.len() as c_uint)
-        };
+        let st =
+            unsafe { (self.nvml_device_get_serial)(device, buf.as_mut_ptr(), buf.len() as c_uint) };
         if st == NVML_SUCCESS {
             let s = c_string_from_buf(unsafe {
                 std::slice::from_raw_parts(buf.as_ptr() as *const u8, buf.len())
@@ -521,19 +528,10 @@ impl NvmlApi {
         let Some(f) = f else {
             return;
         };
-        let mut count = 0u32;
-        let st = unsafe { f(device, &mut count, std::ptr::null_mut()) };
-        // NVML_ERROR_INSUFFICIENT_SIZE is typically 2 — still sets count.
-        if count == 0 {
-            let _ = st;
+        let Ok(infos) = query_list(|count, items| unsafe { f(device, count, items) }) else {
             return;
-        }
-        let mut infos = vec![NvmlProcessInfo::default(); count as usize];
-        let st = unsafe { f(device, &mut count, infos.as_mut_ptr()) };
-        if st != NVML_SUCCESS && st != 2 {
-            return;
-        }
-        for info in infos.into_iter().take(count as usize) {
+        };
+        for info in infos {
             if info.pid == 0 {
                 continue;
             }
@@ -626,44 +624,22 @@ impl NvmlApi {
 
     /// Supported memory clocks (MHz), typically descending.
     pub fn supported_memory_clocks(&self, device: NvmlDevice) -> Result<Vec<u32>> {
-        let f = self.nvml_device_get_supported_memory_clocks.ok_or_else(|| {
-            GpuError::Unsupported("nvmlDeviceGetSupportedMemoryClocks unavailable".into())
-        })?;
-        let mut count = 0u32;
-        let _ = unsafe { f(device, &mut count, std::ptr::null_mut()) };
-        if count == 0 {
-            return Ok(Vec::new());
-        }
-        let mut clocks = vec![0u32; count as usize];
-        let st = unsafe { f(device, &mut count, clocks.as_mut_ptr()) };
-        if st != NVML_SUCCESS && st != 2 {
-            return Err(GpuError::DeviceQueryFailed(format!(
-                "supported memory clocks returned {st}"
-            )));
-        }
-        clocks.truncate(count as usize);
-        Ok(clocks)
+        let f = self
+            .nvml_device_get_supported_memory_clocks
+            .ok_or_else(|| {
+                GpuError::Unsupported("nvmlDeviceGetSupportedMemoryClocks unavailable".into())
+            })?;
+        query_list(|count, items| unsafe { f(device, count, items) })
     }
 
     /// Supported graphics clocks (MHz) for a given memory clock.
     pub fn supported_graphics_clocks(&self, device: NvmlDevice, mem_mhz: u32) -> Result<Vec<u32>> {
-        let f = self.nvml_device_get_supported_graphics_clocks.ok_or_else(|| {
-            GpuError::Unsupported("nvmlDeviceGetSupportedGraphicsClocks unavailable".into())
-        })?;
-        let mut count = 0u32;
-        let _ = unsafe { f(device, mem_mhz, &mut count, std::ptr::null_mut()) };
-        if count == 0 {
-            return Ok(Vec::new());
-        }
-        let mut clocks = vec![0u32; count as usize];
-        let st = unsafe { f(device, mem_mhz, &mut count, clocks.as_mut_ptr()) };
-        if st != NVML_SUCCESS && st != 2 {
-            return Err(GpuError::DeviceQueryFailed(format!(
-                "supported graphics clocks returned {st}"
-            )));
-        }
-        clocks.truncate(count as usize);
-        Ok(clocks)
+        let f = self
+            .nvml_device_get_supported_graphics_clocks
+            .ok_or_else(|| {
+                GpuError::Unsupported("nvmlDeviceGetSupportedGraphicsClocks unavailable".into())
+            })?;
+        query_list(|count, items| unsafe { f(device, mem_mhz, count, items) })
     }
 
     /// Set application clocks (memory, graphics) in MHz.
@@ -701,14 +677,16 @@ impl NvmlApi {
 
     /// Current PCIe generation and width.
     pub fn pcie_info(&self, device: NvmlDevice) -> (Option<u32>, Option<u32>) {
-        let gen = self.nvml_device_get_curr_pcie_link_generation.and_then(|f| {
-            let mut v = 0u32;
-            if unsafe { f(device, &mut v) } == NVML_SUCCESS {
-                Some(v)
-            } else {
-                None
-            }
-        });
+        let gen = self
+            .nvml_device_get_curr_pcie_link_generation
+            .and_then(|f| {
+                let mut v = 0u32;
+                if unsafe { f(device, &mut v) } == NVML_SUCCESS {
+                    Some(v)
+                } else {
+                    None
+                }
+            });
         let width = self.nvml_device_get_curr_pcie_link_width.and_then(|f| {
             let mut v = 0u32;
             if unsafe { f(device, &mut v) } == NVML_SUCCESS {
@@ -740,5 +718,77 @@ fn nvml_arch_name(arch: u32) -> &'static str {
         9 => "Hopper",
         10 => "Blackwell",
         _ => "NVIDIA",
+    }
+}
+
+/// NVML may grow a list between the count and fill calls. Never consume a
+/// buffer on an error, and bound retries when processes are rapidly changing.
+fn query_list<T: Default + Clone>(
+    mut query: impl FnMut(*mut u32, *mut T) -> u32,
+) -> Result<Vec<T>> {
+    let mut count = 0;
+    let status = query(&mut count, std::ptr::null_mut());
+    if status != NVML_SUCCESS && status != NVML_ERROR_INSUFFICIENT_SIZE {
+        return Err(GpuError::DeviceQueryFailed(format!(
+            "NVML list query returned {status}"
+        )));
+    }
+    for _ in 0..4 {
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        if count > 1_048_576 {
+            return Err(GpuError::DeviceQueryFailed(
+                "NVML list exceeds safety bound".into(),
+            ));
+        }
+        let mut values = vec![T::default(); count as usize];
+        let status = query(&mut count, values.as_mut_ptr());
+        if status == NVML_SUCCESS && count as usize <= values.len() {
+            values.truncate(count as usize);
+            return Ok(values);
+        }
+        if status != NVML_ERROR_INSUFFICIENT_SIZE {
+            return Err(GpuError::DeviceQueryFailed(format!(
+                "NVML list query returned {status}"
+            )));
+        }
+    }
+    Err(GpuError::DeviceQueryFailed("NVML list kept growing".into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn list_retries_growth_and_rejects_invalid_argument() {
+        let mut calls = 0;
+        let values = query_list::<u32>(|count, out| unsafe {
+            calls += 1;
+            match calls {
+                1 => {
+                    *count = 1;
+                    NVML_ERROR_INSUFFICIENT_SIZE
+                }
+                2 => {
+                    *count = 2;
+                    NVML_ERROR_INSUFFICIENT_SIZE
+                }
+                _ => {
+                    *count = 2;
+                    *out = 17;
+                    *out.add(1) = 42;
+                    NVML_SUCCESS
+                }
+            }
+        })
+        .unwrap();
+        assert_eq!(values, [17, 42]);
+        assert!(query_list::<u32>(|_, _| 2).is_err());
+    }
+    #[test]
+    fn process_layout_matches_nvml_v2_v3_abi() {
+        assert_eq!(std::mem::size_of::<NvmlProcessInfo>(), 24);
+        assert_eq!(std::mem::offset_of!(NvmlProcessInfo, used_gpu_memory), 8);
     }
 }

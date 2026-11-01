@@ -53,9 +53,9 @@ pub struct GpuListEntry {
     pub index: u32,
     pub name: String,
     pub uuid: String,
-    pub temperature_c: i64,
-    pub power_w: u64,
-    pub power_limit_w: u64,
+    pub temperature_c: Option<i64>,
+    pub power_w: Option<u64>,
+    pub power_limit_w: Option<u64>,
     pub memory_used: String,
     pub memory_total: String,
 }
@@ -75,6 +75,16 @@ pub fn emit_all(format: &OutputFormat, outcomes: &[Outcome]) -> anyhow::Result<(
     if let OutputFormat::Json = format {
         println!("{}", serde_json::to_string_pretty(outcomes)?);
     }
+    let failures = outcomes
+        .iter()
+        .filter(|o| {
+            matches!(
+                o.status,
+                Status::Failed | Status::Refused | Status::Unsupported
+            )
+        })
+        .count();
+    anyhow::ensure!(failures == 0, "{failures} GPU operation(s) failed");
     Ok(())
 }
 
@@ -95,3 +105,10 @@ pub fn failed(
     Outcome::new(format!("gpu{index}"), setting, to).with(Status::Failed, Some(err.to_string()))
 }
 pub mod apple;
+
+pub mod cli;
+
+/// Human-readable optional telemetry.
+pub fn value_or_na(value: Option<impl std::fmt::Display>) -> String {
+    value.map(|v| v.to_string()).unwrap_or_else(|| "N/A".into())
+}

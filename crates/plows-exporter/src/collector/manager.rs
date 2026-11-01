@@ -92,3 +92,9 @@ impl CollectorManager {
         self.collectors.len()
     }
 }
+
+impl Default for CollectorManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}

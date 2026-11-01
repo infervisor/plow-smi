@@ -83,6 +83,7 @@ pub struct AmdsmiBoardInfo {
 
 /// Resolved AMD SMI function pointers.
 pub struct AmdSmiApi {
+    initialized: std::sync::Mutex<bool>,
     amdsmi_init: unsafe extern "C" fn(u64) -> AmdsmiStatus,
     amdsmi_shut_down: unsafe extern "C" fn() -> AmdsmiStatus,
     amdsmi_get_socket_handles: unsafe extern "C" fn(*mut u32, *mut SocketHandle) -> AmdsmiStatus,
@@ -90,21 +91,28 @@ pub struct AmdSmiApi {
         unsafe extern "C" fn(SocketHandle, *mut u32, *mut ProcessorHandle) -> AmdsmiStatus,
     amdsmi_get_processor_type: unsafe extern "C" fn(ProcessorHandle, *mut u32) -> AmdsmiStatus,
     amdsmi_get_gpu_busy_percent: unsafe extern "C" fn(ProcessorHandle, *mut u32) -> AmdsmiStatus,
-    amdsmi_get_gpu_memory_total: unsafe extern "C" fn(ProcessorHandle, u32, *mut u64) -> AmdsmiStatus,
-    amdsmi_get_gpu_memory_usage: unsafe extern "C" fn(ProcessorHandle, u32, *mut u64) -> AmdsmiStatus,
-    amdsmi_get_power_info: unsafe extern "C" fn(ProcessorHandle, *mut AmdsmiPowerInfo) -> AmdsmiStatus,
+    amdsmi_get_gpu_memory_total:
+        unsafe extern "C" fn(ProcessorHandle, u32, *mut u64) -> AmdsmiStatus,
+    amdsmi_get_gpu_memory_usage:
+        unsafe extern "C" fn(ProcessorHandle, u32, *mut u64) -> AmdsmiStatus,
+    amdsmi_get_power_info:
+        unsafe extern "C" fn(ProcessorHandle, *mut AmdsmiPowerInfo) -> AmdsmiStatus,
     amdsmi_get_clk_freq:
         unsafe extern "C" fn(ProcessorHandle, u32, *mut AmdsmiFrequencies) -> AmdsmiStatus,
     amdsmi_get_temp_metric:
         unsafe extern "C" fn(ProcessorHandle, u32, u32, *mut i64) -> AmdsmiStatus,
     amdsmi_get_gpu_fan_rpms: unsafe extern "C" fn(ProcessorHandle, u32, *mut i64) -> AmdsmiStatus,
-    amdsmi_get_gpu_device_uuid: unsafe extern "C" fn(ProcessorHandle, *mut u32, *mut u8) -> AmdsmiStatus,
-    amdsmi_get_gpu_board_info: unsafe extern "C" fn(ProcessorHandle, *mut AmdsmiBoardInfo) -> AmdsmiStatus,
+    amdsmi_get_gpu_device_uuid:
+        unsafe extern "C" fn(ProcessorHandle, *mut u32, *mut u8) -> AmdsmiStatus,
+    amdsmi_get_gpu_board_info:
+        unsafe extern "C" fn(ProcessorHandle, *mut AmdsmiBoardInfo) -> AmdsmiStatus,
     /// `amdsmi_get_gpu_device_bdf`: fills an `amdsmi_bdf_t`, a packed u64.
-    amdsmi_get_gpu_device_bdf: Option<unsafe extern "C" fn(ProcessorHandle, *mut u64) -> AmdsmiStatus>,
+    amdsmi_get_gpu_device_bdf:
+        Option<unsafe extern "C" fn(ProcessorHandle, *mut u64) -> AmdsmiStatus>,
     /// `amdsmi_get_gpu_bdf_id`: the kernel's BDF id, a different layout.
     amdsmi_get_gpu_bdf_id: Option<unsafe extern "C" fn(ProcessorHandle, *mut u64) -> AmdsmiStatus>,
-    amdsmi_get_gpu_perf_level: Option<unsafe extern "C" fn(ProcessorHandle, *mut u32) -> AmdsmiStatus>,
+    amdsmi_get_gpu_perf_level:
+        Option<unsafe extern "C" fn(ProcessorHandle, *mut u32) -> AmdsmiStatus>,
     amdsmi_set_gpu_perf_level: Option<unsafe extern "C" fn(ProcessorHandle, u32) -> AmdsmiStatus>,
     amdsmi_set_power_cap: Option<unsafe extern "C" fn(ProcessorHandle, u32, u64) -> AmdsmiStatus>,
     amdsmi_get_power_cap_info:
@@ -121,6 +129,9 @@ unsafe impl Send for AmdSmiApi {}
 unsafe impl Sync for AmdSmiApi {}
 
 impl AmdSmiApi {
+    pub fn supports_power_limit(&self) -> bool {
+        self.amdsmi_set_power_cap.is_some()
+    }
     pub fn load() -> Result<Self> {
         // libamd_smi links libstdc++ and dlopens libdrm at init. Under a Nix
         // build neither is on the loader's path, so load them first.
@@ -137,6 +148,7 @@ impl AmdSmiApi {
         // SAFETY: symbol types match the AMD SMI C ABI (amdsmi.h).
         unsafe {
             Ok(Self {
+                initialized: std::sync::Mutex::new(false),
                 amdsmi_init: dynlib::resolve_required(&lib, b"amdsmi_init\0", library)?,
                 amdsmi_shut_down: dynlib::resolve_required(&lib, b"amdsmi_shut_down\0", library)?,
                 amdsmi_get_socket_handles: dynlib::resolve_required(
@@ -228,22 +240,32 @@ impl AmdSmiApi {
     }
 
     pub fn init(&self) -> Result<()> {
+        let mut initialized = self.initialized.lock().unwrap_or_else(|e| e.into_inner());
+        if *initialized {
+            return Ok(());
+        }
         let st = unsafe { (self.amdsmi_init)(AMDSMI_INIT_AMD_GPUS) };
         if st != AMDSMI_STATUS_SUCCESS {
             return Err(GpuError::InitializationFailed(format!(
                 "amdsmi_init returned {st}"
             )));
         }
+        *initialized = true;
         Ok(())
     }
 
     pub fn shutdown(&self) {
-        let _ = unsafe { (self.amdsmi_shut_down)() };
+        let mut initialized = self.initialized.lock().unwrap_or_else(|e| e.into_inner());
+        if *initialized {
+            let _ = unsafe { (self.amdsmi_shut_down)() };
+            *initialized = false;
+        }
     }
 
     pub fn enumerate_gpus(&self) -> Result<Vec<ProcessorHandle>> {
         let mut socket_count: u32 = 0;
-        let st = unsafe { (self.amdsmi_get_socket_handles)(&mut socket_count, std::ptr::null_mut()) };
+        let st =
+            unsafe { (self.amdsmi_get_socket_handles)(&mut socket_count, std::ptr::null_mut()) };
         if st != AMDSMI_STATUS_SUCCESS || socket_count == 0 {
             return Err(GpuError::DeviceQueryFailed(format!(
                 "amdsmi_get_socket_handles count failed ({st})"
@@ -308,15 +330,15 @@ impl AmdSmiApi {
         let mut total = 0u64;
         let mut used = 0u64;
         let mut val = 0u64;
-        let total_ok = unsafe {
-            (self.amdsmi_get_gpu_memory_total)(h, AMDSMI_MEM_TYPE_VRAM, &mut val)
-        } == AMDSMI_STATUS_SUCCESS;
+        let total_ok =
+            unsafe { (self.amdsmi_get_gpu_memory_total)(h, AMDSMI_MEM_TYPE_VRAM, &mut val) }
+                == AMDSMI_STATUS_SUCCESS;
         if total_ok {
             total = val;
         }
-        let used_ok = unsafe {
-            (self.amdsmi_get_gpu_memory_usage)(h, AMDSMI_MEM_TYPE_VRAM, &mut val)
-        } == AMDSMI_STATUS_SUCCESS;
+        let used_ok =
+            unsafe { (self.amdsmi_get_gpu_memory_usage)(h, AMDSMI_MEM_TYPE_VRAM, &mut val) }
+                == AMDSMI_STATUS_SUCCESS;
         if used_ok {
             used = val;
         }
@@ -363,7 +385,7 @@ impl AmdSmiApi {
             return None;
         }
         let level = freq.current as usize;
-        if level < freq.num_supported as usize && freq.num_supported > 0 {
+        if level < freq.num_supported as usize && level < freq.frequency.len() {
             let raw = freq.frequency[level];
             Some(if raw > 10_000 {
                 (raw / 1_000_000) as u32
@@ -458,8 +480,14 @@ impl AmdSmiApi {
         }
         let f = self.amdsmi_get_gpu_bdf_id?;
         let mut v = 0u64;
-        (unsafe { f(h, &mut v) } == AMDSMI_STATUS_SUCCESS)
-            .then(|| fmt((v >> 32) & 0xffff, (v >> 8) & 0xff, (v >> 3) & 0x1f, v & 0x7))
+        (unsafe { f(h, &mut v) } == AMDSMI_STATUS_SUCCESS).then(|| {
+            fmt(
+                (v >> 32) & 0xffff,
+                (v >> 8) & 0xff,
+                (v >> 3) & 0x1f,
+                v & 0x7,
+            )
+        })
     }
 
     /// Current performance level enum (`0=auto`, `1=low`, `2=high`, `3=manual`).
@@ -475,9 +503,9 @@ impl AmdSmiApi {
 
     /// Set performance level.
     pub fn set_perf_level(&self, h: ProcessorHandle, level: u32) -> Result<()> {
-        let f = self.amdsmi_set_gpu_perf_level.ok_or_else(|| {
-            GpuError::Unsupported("amdsmi_set_gpu_perf_level unavailable".into())
-        })?;
+        let f = self
+            .amdsmi_set_gpu_perf_level
+            .ok_or_else(|| GpuError::Unsupported("amdsmi_set_gpu_perf_level unavailable".into()))?;
         let st = unsafe { f(h, level) };
         if st != AMDSMI_STATUS_SUCCESS {
             return Err(GpuError::DeviceQueryFailed(format!(

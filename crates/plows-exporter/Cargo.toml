@@ -19,13 +19,13 @@ tpu = ["dep:reqwest"]
 
 [dependencies]
 # Async runtime
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
+tokio = { workspace = true }
 
 # Web framework for Prometheus endpoint
-axum = "0.8"
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 
 # Metrics
-prometheus = "0.14"
+prometheus = { version = "0.14", default-features = false }
 
 # CLI
 clap = { version = "4", features = ["derive"] }
@@ -51,10 +51,10 @@ whoami = "1"
 plows-gpu = { path = "../plows-gpu" }
 
 # Optional: System metrics
-sysinfo = { version = "0.36", optional = true }
+sysinfo = { workspace = true, optional = true }
 
 # Optional: TPU support (HTTP client for GCE metadata + TPU runtime)
-reqwest = { version = "0.12", features = ["json"], optional = true }
+reqwest = { version = "0.13", default-features = false, features = ["rustls"], optional = true }
 
 [[bin]]
 name = "plows-exporter"

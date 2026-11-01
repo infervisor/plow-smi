@@ -186,9 +186,9 @@ first (honouring `LD_LIBRARY_PATH` and the system loader), then by absolute path
 
 | Vendor | Absolute paths tried |
 |--------|----------------------|
-| NVIDIA (`libnvidia-ml.so.1`) | `/run/opengl-driver/lib` |
+| NVIDIA (`libnvidia-ml.so.1`) | `/run/opengl-driver/lib`, standard Linux multiarch/lib64 directories, `/usr/local/nvidia/lib64` |
 | AMD (`libamd_smi.so`) | `/opt/rocm/lib`, `/run/opengl-driver/lib` |
-| Intel (`libze_loader.so.1`) | `/run/opengl-driver/lib` |
+| Intel (`libze_loader.so.1`) | `/run/opengl-driver/lib`, standard Linux multiarch/lib64 directories |
 
 Apple Silicon does not use `dlopen` for vendor libraries; it reads IOReport, IOKit
 and sysctl from macOS directly.
@@ -254,3 +254,43 @@ Licensed under the [Apache License, Version 2.0](LICENSE).
 
 This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md).
 Report unacceptable behavior to **shaswot@infervisor.ai**.
+
+## Collection cost and control contract
+
+Both `plow-smi export` and `plows-exporter` use the same server and accept
+`--interval SECONDS` (positive integer), IPv4/IPv6 `--bind`, and SIGINT/SIGTERM.
+The server uses one async thread and at most four blocking workers. CPU, memory,
+network and GPU counters refresh each collection; process counts, disks and
+system temperature sensors refresh at most once per five seconds. Apple SoC
+telemetry retains its independent one-second sampler. The TUI refreshes its
+process table while the Processes tab is visible.
+
+Release builds use thin LTO, one codegen unit, and stripped symbols. Default
+builds omit TPU HTTP/TLS dependencies; enable TPU with
+`cargo build --release -p plows-cli --features tpu` or
+`cargo build --release -p plows-exporter --features tpu`. Explicit `--tpu` on a
+build without that feature returns an error.
+
+`plow-smi ctl` now also exposes `capabilities`, `apply`, and `cpu`, matching
+`plows-ctl`. Control JSON **contract version 2** makes capabilities and dry runs
+read-only. `power_limit_settable` means a setter and usable limit queries are
+available; write permission is checked only during an actual apply. Consumers
+requiring version 1 must explicitly handle this changed meaning. Missing list
+telemetry is `null` in JSON and `N/A` in text. System collector construction is
+fallible with sysinfo 0.40: library callers use `SystemCollector::new()?`.
+
+```bash
+plow-smi ctl capabilities --format json
+printf '%s\n' '{"profile":"balanced"}' | plow-smi ctl apply --dry-run
+cargo test --workspace --all-features
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo audit --deny warnings
+# Read-only live telemetry, exporter measurements and TUI/terminal checks:
+python3 scripts/validate-hardware.py --bin-dir target/release --vendor apple
+python3 scripts/validate-hardware.py --bin-dir target/release --vendor nvidia
+# Linux only: verifies dry-run and failure contracts using a fake NVML driver.
+PLOW_TEST_BIN_DIR=target/release python3 -m unittest discover -s scripts -p 'test_*.py'
+```
+
+The hardware validator does not change clocks, power limits or CPU policies.
+AMD/Intel/TPU hardware requires separate validation on hosts with those devices.

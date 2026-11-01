@@ -34,11 +34,10 @@ use app::{OverviewFocus, ViewTab};
 const TICK_RATE: Duration = Duration::from_secs(1);
 
 /// Run the TUI GPU & system monitor application.
-pub fn run() -> color_eyre::Result<()> {
-    color_eyre::install()?;
-
+pub fn run() -> anyhow::Result<()> {
     // Setup terminal
     enable_raw_mode()?;
+    let _restore = TerminalRestore;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
@@ -53,17 +52,12 @@ pub fn run() -> color_eyre::Result<()> {
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
-    if let Err(err) = result {
-        eprintln!("Error: {err:?}");
-        std::process::exit(1);
-    }
-
-    Ok(())
+    result
 }
 
 /// Main event loop.
-fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> color_eyre::Result<()> {
-    let mut app = app::App::new();
+fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyhow::Result<()> {
+    let mut app = app::App::new()?;
     let mut last_tick = Instant::now();
 
     // Initial tick to populate history
@@ -124,7 +118,9 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> color_eyre:
 
         if last_tick.elapsed() >= TICK_RATE {
             app.tick();
-            app.collect_processes();
+            if app.current_tab == ViewTab::Processes {
+                app.collect_processes();
+            }
             last_tick = Instant::now();
         }
 
@@ -134,4 +130,13 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> color_eyre:
     }
 
     Ok(())
+}
+
+/// Restore terminal state on setup errors, early returns and unwinding.
+struct TerminalRestore;
+impl Drop for TerminalRestore {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, crossterm::cursor::Show);
+    }
 }

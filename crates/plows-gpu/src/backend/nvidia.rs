@@ -80,6 +80,7 @@ impl GpuBackend for NvidiaBackend {
 
     fn refresh(&mut self) {
         for slot in &mut self.slots {
+            slot.metrics = CachedMetrics::default();
             let h = slot.handle;
             if let Some(util) = self.api.utilization(h) {
                 slot.metrics.utilization = Some(util.gpu as f32);
@@ -184,11 +185,18 @@ impl GpuBackend for NvidiaBackend {
 }
 
 impl NvidiaBackend {
+    /// Whether the loaded driver exports a power-limit setter.
+    pub fn supports_power_limit(&self) -> bool {
+        self.api.supports_power_limit()
+    }
+
     fn device_at(&self, index: u32) -> Result<NvmlDevice> {
         self.slots
             .get(index as usize)
             .map(|s| s.handle)
-            .ok_or_else(|| crate::error::GpuError::DeviceQueryFailed(format!("GPU {index} not found")))
+            .ok_or_else(|| {
+                crate::error::GpuError::DeviceQueryFailed(format!("GPU {index} not found"))
+            })
     }
 
     /// Max graphics/memory clocks (MHz).
@@ -260,8 +268,7 @@ impl NvidiaBackend {
         graphics_mhz: u32,
     ) -> Result<()> {
         let h = self.device_at(index)?;
-        self.api
-            .set_applications_clocks(h, mem_mhz, graphics_mhz)
+        self.api.set_applications_clocks(h, mem_mhz, graphics_mhz)
     }
 
     /// Reset application clocks to defaults.
