@@ -50,11 +50,6 @@ pub unsafe fn resolve_optional<T: Copy>(lib: &Library, name: &[u8]) -> Option<T>
     Some(*sym)
 }
 
-/// Where NixOS exposes the driver's userspace libraries. It is not on the
-/// default `dlopen` search path, so vendor libraries are also tried by
-/// absolute path under it.
-const NIXOS_DRIVER_DIR: &str = "/run/opengl-driver/lib";
-
 /// Candidate library names for a vendor on the current platform.
 pub fn nvml_candidates() -> &'static [&'static str] {
     &[
@@ -69,61 +64,6 @@ pub fn nvml_candidates() -> &'static [&'static str] {
         #[cfg(target_os = "windows")]
         "nvml.dll",
     ]
-}
-
-/// AMD SMI sonames / common absolute ROCm install paths.
-pub fn amdsmi_candidates() -> &'static [&'static str] {
-    &[
-        "libamd_smi.so",
-        "libamd_smi.so.1",
-        "/opt/rocm/lib/libamd_smi.so",
-        "/opt/rocm/lib/libamd_smi.so.1",
-        "/run/opengl-driver/lib/libamd_smi.so",
-        #[cfg(target_os = "windows")]
-        "amd_smi_dll.dll",
-    ]
-}
-
-/// Library directories of the host distribution.
-///
-/// A binary built by Nix has a dynamic loader that searches only the Nix
-/// store, so a vendor library found by absolute path (`/opt/rocm/lib/…`) still
-/// fails to load: its own dependencies (`libstdc++.so.6`, `libdrm.so.2`) live
-/// here, where that loader never looks.
-const HOST_LIB_DIRS: &[&str] = &[
-    "/lib/x86_64-linux-gnu",
-    "/usr/lib/x86_64-linux-gnu",
-    "/lib/aarch64-linux-gnu",
-    "/usr/lib/aarch64-linux-gnu",
-    "/usr/lib64",
-    "/lib64",
-    "/usr/lib",
-    "/opt/rocm/lib",
-    NIXOS_DRIVER_DIR,
-];
-
-/// Load each soname, so a vendor library that needs it finds it already
-/// loaded. The binary's own search path is tried first (under Nix that gives
-/// its own, newer `libstdc++`), then the host's directories. A soname that
-/// cannot be found is skipped: the vendor library may not need it.
-///
-/// The returned handles must outlive the vendor library.
-pub fn preload(sonames: &[&str]) -> Vec<Library> {
-    let mut loaded = Vec::new();
-    for soname in sonames {
-        let found = unsafe { Library::new(*soname) }.ok().or_else(|| {
-            HOST_LIB_DIRS
-                .iter()
-                .map(|d| std::path::Path::new(d).join(soname))
-                .filter(|p| p.exists())
-                .find_map(|p| unsafe { Library::new(&p) }.ok())
-        });
-        match found {
-            Some(lib) => loaded.push(lib),
-            None => tracing::debug!(soname, "preload: not found"),
-        }
-    }
-    loaded
 }
 
 /// Level Zero loader sonames.

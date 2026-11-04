@@ -25,7 +25,7 @@
         };
         "plows-ctl" = {
           cargoPackage = "plows-ctl";
-          description = "GPU power & clock control library & CLI — backed by plows-gpu (NVML / AMD SMI)";
+          description = "GPU power & clock control library & CLI — backed by plows-gpu (NVML / amdgpu sysfs)";
         };
       };
       version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package.version;

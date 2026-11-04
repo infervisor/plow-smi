@@ -7,7 +7,7 @@
 
 Production-grade GPU observability and control for heterogeneous compute — NVIDIA, AMD, Intel, and Apple Silicon — from one Rust workspace.
 
-**No compile-time GPU SDKs.** Vendor libraries (`libnvidia-ml`, `libamd_smi`, `libze_loader`) are loaded at runtime with `dlopen`. One binary works on CPU-only hosts and enables GPUs automatically when drivers are present. On Apple Silicon, telemetry comes from macOS system frameworks, so nothing extra is installed.
+**No compile-time GPU SDKs.** Vendor libraries (`libnvidia-ml`, `libze_loader`) are loaded at runtime with `dlopen`. AMD needs no library at all: telemetry and control come straight from the `amdgpu` kernel driver (sysfs, hwmon, KFD, DRM fdinfo), so ROCm is not required. One binary works on CPU-only hosts and enables GPUs automatically when drivers are present. On Apple Silicon, telemetry comes from macOS system frameworks, so nothing extra is installed.
 
 ![plows-top demo](assets/plows-top-demo.gif)
 
@@ -97,9 +97,9 @@ Rust dependencies are statically linked. Linux retains dynamic glibc because a
 fully static musl executable cannot `dlopen` GPU drivers. The archive bundles a
 matching loader and its runtime dependencies under `lib/`, with small `/bin/sh`
 launchers in `bin/`. This avoids requiring the host's glibc version or Nix store.
-Vendor libraries are **not bundled**: install NVIDIA NVML, AMD SMI/ROCm, or Intel
-Level Zero on the host. Standard distribution, NixOS driver and ROCm library
-directories are searched; use `LD_LIBRARY_PATH` for custom installations.
+Vendor libraries are **not bundled**: install NVIDIA NVML or Intel Level Zero on
+the host. AMD needs only the `amdgpu` kernel driver. Standard distribution and
+NixOS driver directories are searched; use `LD_LIBRARY_PATH` for custom installations.
 Vendor libraries and their dependencies must match the host architecture and
 remain compatible with the bundled glibc. Linux kernel compatibility follows
 the glibc baseline pinned in `flake.lock`; real GPU hardware is not exercised by CI.
@@ -138,7 +138,7 @@ not overwrite an existing release.
 |------|----------|------------|
 | CUDA / ROCm / oneAPI SDKs | **Not required** | Not required |
 | NVIDIA driver + `libnvidia-ml.so.1` | — | Optional (auto) |
-| AMD ROCm + `libamd_smi.so` | — | Optional (auto) |
+| AMD `amdgpu` kernel driver (no ROCm) | — | Optional (auto) |
 | Intel Level Zero + `libze_loader.so` | — | Optional (auto) |
 | Apple Silicon (macOS, ARM64) | — | Built in (macOS system frameworks) |
 
@@ -187,11 +187,31 @@ first (honouring `LD_LIBRARY_PATH` and the system loader), then by absolute path
 | Vendor | Absolute paths tried |
 |--------|----------------------|
 | NVIDIA (`libnvidia-ml.so.1`) | `/run/opengl-driver/lib`, standard Linux multiarch/lib64 directories, `/usr/local/nvidia/lib64` |
-| AMD (`libamd_smi.so`) | `/opt/rocm/lib`, `/run/opengl-driver/lib` |
 | Intel (`libze_loader.so.1`) | `/run/opengl-driver/lib`, standard Linux multiarch/lib64 directories |
 
 Apple Silicon does not use `dlopen` for vendor libraries; it reads IOReport, IOKit
 and sysctl from macOS directly.
+
+### AMD (amdgpu driver)
+
+AMD GPUs are read from the open `amdgpu` kernel driver, with no ROCm or
+`libamd_smi`:
+
+| Data | Source |
+|------|--------|
+| Devices | PCI display devices bound to `/sys/bus/pci/drivers/amdgpu`, in PCI order |
+| Utilization, memory controller busy | `gpu_busy_percent`, `mem_busy_percent` |
+| VRAM used / total | `mem_info_vram_used`, `mem_info_vram_total` |
+| Temperature (junction → edge → mem), power, power cap, fan RPM, clocks | `hwmon` (`temp*`, `power1_input`/`power1_average`, `power1_cap*`, `fan1_input`, `freq*`), falling back to `pp_dpm_sclk`/`pp_dpm_mclk` |
+| UUID | `unique_id`, formatted exactly as AMD SMI does |
+| Name | `product_name`, else the `pci.ids` device name |
+| Architecture | KFD topology `gfx_target_version` (e.g. `gfx1201`) |
+| Processes | KFD `/sys/class/kfd/kfd/proc/<pid>/vram_<gpu>` (all users' compute jobs) and DRM `/proc/<pid>/fdinfo` (graphics clients the caller may inspect) |
+| Control | `power1_cap` (µW) and `power_dpm_force_performance_level`; root required |
+
+Telemetry needs no privileges. In a container, mount the host root read-only
+(for example at `/host`) and set `PLOWS_HOST_ROOT=/host`; `/sys` and `/proc` are
+then read from there.
 
 ### NixOS
 
@@ -215,8 +235,8 @@ path; plow-smi searches it automatically, so `LD_LIBRARY_PATH` is not needed.
 
 ### Troubleshooting: GPU not detected
 
-1. Run `nvidia-smi` (or `rocm-smi`). If it is missing or fails, install or enable
-   the vendor driver first; plow-smi cannot report a GPU the driver does not expose.
+1. Run `nvidia-smi`, or for AMD `ls /sys/bus/pci/drivers/amdgpu`. If it is missing or fails,
+   install or enable the vendor driver first; plow-smi cannot report a GPU the driver does not expose.
 2. On a hybrid laptop, make sure the NVIDIA GPU is not powered off or blacklisted
    (for example `nouveau` blacklisted with no proprietary driver configured).
 3. Check the library is visible: `ls /run/opengl-driver/lib/libnvidia-ml.so.1`

@@ -10,7 +10,7 @@ use crate::{format_bytes, GpuListEntry, OutputFormat};
 pub fn list_all(format: &OutputFormat) -> Result<()> {
     let mut mgr = GpuManager::discover();
     if !mgr.has_gpu() {
-        anyhow::bail!("No GPUs discovered (NVML / AMD SMI / Level Zero unavailable)");
+        anyhow::bail!("No GPUs discovered (no NVML, amdgpu driver or Level Zero)");
     }
     mgr.refresh_all();
 

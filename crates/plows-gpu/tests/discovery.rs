@@ -107,11 +107,7 @@ impl GpuBackend for StubBackend {
 
 #[test]
 fn candidates_include_the_nixos_driver_directory() {
-    for candidates in [
-        dynlib::nvml_candidates(),
-        dynlib::amdsmi_candidates(),
-        dynlib::level_zero_candidates(),
-    ] {
+    for candidates in [dynlib::nvml_candidates(), dynlib::level_zero_candidates()] {
         assert!(
             candidates
                 .iter()
@@ -125,14 +121,14 @@ fn candidates_include_the_nixos_driver_directory() {
 fn missing_library_returns_library_not_found() {
     let err = dynlib::open_first(&[
         "/nonexistent/path/libnvidia-ml.so.1",
-        "/also/missing/libamd_smi.so",
+        "/also/missing/libze_loader.so.1",
     ])
     .expect_err("should fail to open missing libraries");
 
     match err {
         GpuError::LibraryNotFound { candidates } => {
             assert!(candidates.contains("libnvidia-ml"));
-            assert!(candidates.contains("libamd_smi"));
+            assert!(candidates.contains("libze_loader"));
         }
         other => panic!("unexpected error: {other}"),
     }
@@ -233,7 +229,6 @@ fn refresh_all_invokes_backends() {
 #[test]
 fn candidate_lists_are_non_empty() {
     assert!(!dynlib::nvml_candidates().is_empty());
-    assert!(!dynlib::amdsmi_candidates().is_empty());
     assert!(!dynlib::level_zero_candidates().is_empty());
 }
 
@@ -273,10 +268,22 @@ fn live_nvml_load_smoke() {
 }
 
 #[test]
-#[ignore = "requires libamd_smi.so on the host"]
-fn live_amdsmi_load_smoke() {
-    let api = plows_gpu::ffi::amdsmi::AmdSmiApi::load().expect("AMD SMI load");
-    api.init().expect("AMD SMI init");
+#[ignore = "requires a GPU bound to the amdgpu kernel driver"]
+fn live_amdgpu_smoke() {
+    let mut backend = plows_gpu::AmdBackend::try_load().expect("amdgpu backend");
+    backend.refresh();
+    assert!(backend.device_count() > 0);
+    for (i, dev) in backend.devices().iter().enumerate() {
+        assert!(!dev.uuid.is_empty() && !dev.pci_bus_id.is_empty());
+        let s = backend.snapshot(i).unwrap();
+        assert!(s.memory_total.unwrap() > 0);
+        assert!(s.memory_used.unwrap() <= s.memory_total.unwrap());
+        assert!((0.0..=100.0).contains(&s.utilization.unwrap()));
+        assert!(s.temperature.unwrap() > 0.0);
+        assert!(s.power_usage.unwrap() >= 0.0);
+        println!("{dev:?}\n  {s:?}");
+    }
+    println!("processes: {:?}", backend.collect_processes());
 }
 
 #[test]

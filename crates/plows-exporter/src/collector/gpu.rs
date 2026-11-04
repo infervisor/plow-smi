@@ -1,4 +1,4 @@
-//! Unified GPU collector backed by `plows-gpu` (NVML / AMD SMI / Level Zero).
+//! Unified GPU collector backed by `plows-gpu` (NVML / amdgpu sysfs / Level Zero).
 
 use std::sync::Mutex;
 

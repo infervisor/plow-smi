@@ -148,7 +148,7 @@ pub trait GpuBackend: Send + Sync {
         None
     }
 
-    /// Processes currently using devices on this backend (NVML today).
+    /// Processes currently using devices on this backend (NVML, amdgpu).
     fn collect_processes(&self) -> Vec<GpuProcessInfo> {
         Vec::new()
     }

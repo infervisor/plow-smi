@@ -12,7 +12,7 @@ By participating, you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
   reproducible dev shell: `nix develop`
 
 No GPU or vendor SDK is required to build or test. GPU vendor libraries
-(`libnvidia-ml`, `libamd_smi`, `libze_loader`) are loaded at runtime via
+(`libnvidia-ml`, `libze_loader`) are loaded at runtime via
 `dlopen` — `plows-gpu` discovers them if present and skips them cleanly if
 not, so CI and laptops without GPUs stay green.
 

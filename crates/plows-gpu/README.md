@@ -1,12 +1,12 @@
 # plows-gpu
 
-Cross-platform GPU metrics and control via **runtime** `dlopen` of:
+Cross-platform GPU metrics and control, with no build-time GPU SDK:
 
-| Vendor | Library |
-|--------|---------|
-| NVIDIA | `libnvidia-ml.so.1` |
-| AMD | `libamd_smi.so` |
-| Intel | `libze_loader.so` |
+| Vendor | Source |
+|--------|--------|
+| NVIDIA | `libnvidia-ml.so.1` (runtime `dlopen`) |
+| AMD | `amdgpu` kernel driver: sysfs, hwmon, KFD, DRM fdinfo (no library) |
+| Intel | `libze_loader.so` (runtime `dlopen`) |
 
 No compile-time CUDA / ROCm / oneAPI dependency.
 

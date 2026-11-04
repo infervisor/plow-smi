@@ -9,6 +9,8 @@ import sys
 import tarfile
 import tempfile
 
+from fake_amdgpu import make_gpu
+
 
 BINARIES = ("plow-smi", "plows-exporter", "plows-top", "plows-ctl")
 
@@ -37,9 +39,10 @@ def main():
         # proves dlopen + dlsym + init without pretending to emulate a real GPU.
         mock = temp / "mock"
         mock.mkdir()
+        # AMD reads the amdgpu driver's sysfs: point it at a fake host root.
+        make_gpu(temp / "amdhost")
         for vendor, source, soname, init in (
             ("nvidia", "nvml.rs", "libnvidia-ml.so.1", "nvmlInit_v2"),
-            ("amd", "amdsmi.rs", "libamd_smi.so", "amdsmi_init"),
         ):
             ffi = Path("crates/plows-gpu/src/ffi") / source
             symbols = set(re.findall(r'b"(\w+)\\0"', ffi.read_text()))
@@ -47,7 +50,7 @@ def main():
             c_source = mock / f"{vendor}.c"
             c_source.write_text(
                 '#include <stdio.h>\n#include <stdint.h>\n'
-                + f'int {init}({"uint64_t flags" if vendor == "amd" else "void"}) {{\n'
+                + f'int {init}(void) {{\n'
                 + f'  FILE *f = fopen("/markers/{vendor}", "w");\n'
                 + '  if (f) { fputs("initialized", f); fclose(f); }\n  return 1;\n}\n'
                 + '\n'.join(f'int {sym}(void) {{ return 1; }}' for sym in sorted(symbols))
@@ -70,17 +73,19 @@ ln -s /release/bin/plow-smi /usr/local/bin/plow-smi
 plow-smi --version
 # The mocks intentionally fail init; check markers, not the no-GPU exit status.
 /release/bin/plows-ctl nvidia list >/dev/null 2>&1 || true
-/release/bin/plows-ctl amd list >/dev/null 2>&1 || true
 test -f /markers/nvidia
-test -f /markers/amd
+PLOWS_HOST_ROOT=/amdhost /release/bin/plows-ctl amd list --format json | grep -q 2d007551-0000-1000-80e8-238c16749fb8
+# A host without amdgpu must fail cleanly, not crash.
+if PLOWS_HOST_ROOT=/nonexistent /release/bin/plows-ctl amd list >/dev/null 2>&1; then exit 1; fi
 '''
             subprocess.run([
                 "docker", "run", "--rm", "--network=none",
                 "-v", f"{root}:/release:ro", "-v", f"{mock}:/mock:ro",
-                "-v", f"{markers}:/markers", "-e", "LD_LIBRARY_PATH=/mock",
+                "-v", f"{markers}:/markers", "-v", f"{temp / 'amdhost'}:/amdhost:ro",
+                "-e", "LD_LIBRARY_PATH=/mock",
                 image, "/bin/sh", "-c", smoke,
             ], check=True)
-            print(f"Validated portability and dynamic NVIDIA/AMD loading on {image}")
+            print(f"Validated portability, dynamic NVIDIA loading and amdgpu sysfs on {image}")
 
 
 if __name__ == "__main__":

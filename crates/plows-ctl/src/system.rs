@@ -73,7 +73,7 @@ impl SystemControl {
                 b.set_power_limit(i, mw).map_err(|e| e.to_string())
             }
             Slot::Amd(i) => {
-                let b = self.amd.as_ref().ok_or("AMD SMI is not loaded")?;
+                let b = self.amd.as_ref().ok_or("no amdgpu devices")?;
                 b.set_power_limit(i, mw).map_err(|e| e.to_string())
             }
             Slot::Intel(_) => Err("Intel GPUs are read-only (Level Zero)".into()),

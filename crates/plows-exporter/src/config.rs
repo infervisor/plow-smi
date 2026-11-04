@@ -8,7 +8,7 @@ use clap::Parser;
     name = "plows-exporter",
     version,
     about = "Professional GPU metrics exporter for Prometheus",
-    long_about = "Collects GPU and system metrics via plows-gpu (NVML / AMD SMI / Level Zero) \
+    long_about = "Collects GPU and system metrics via plows-gpu (NVML / amdgpu sysfs / Level Zero) \
                   and system sources, exposing them as Prometheus metrics over HTTP."
 )]
 pub struct Config {
