@@ -348,14 +348,16 @@ impl AmdSmiApi {
         )
     }
 
-    /// Power draw in watts (best-effort from current_socket_power).
+    /// Power draw in watts.
+    ///
+    /// `current_socket_power` is MI300+ only; Navi and older report it as the
+    /// `u32::MAX` "not supported" sentinel and fill `average_socket_power`.
     pub fn power_watts(&self, h: ProcessorHandle) -> Option<f32> {
         let mut info = unsafe { std::mem::zeroed::<AmdsmiPowerInfo>() };
-        if unsafe { (self.amdsmi_get_power_info)(h, &mut info) } == AMDSMI_STATUS_SUCCESS {
-            Some(info.current_socket_power as f32)
-        } else {
-            None
+        if unsafe { (self.amdsmi_get_power_info)(h, &mut info) } != AMDSMI_STATUS_SUCCESS {
+            return None;
         }
+        socket_power_watts(info.current_socket_power, info.average_socket_power)
     }
 
     /// Power limit in watts.
@@ -560,5 +562,25 @@ impl AmdSmiApi {
 impl Drop for AmdSmiApi {
     fn drop(&mut self) {
         self.shutdown();
+    }
+}
+
+/// Pick the first valid socket-power reading; `u32::MAX` and 0 mean unsupported.
+fn socket_power_watts(current: u32, average: u32) -> Option<f32> {
+    [current, average]
+        .into_iter()
+        .find(|&w| w != 0 && w != u32::MAX)
+        .map(|w| w as f32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn socket_power_skips_unsupported_sentinel() {
+        assert_eq!(socket_power_watts(450, 400), Some(450.0));
+        assert_eq!(socket_power_watts(u32::MAX, 13), Some(13.0));
+        assert_eq!(socket_power_watts(0, 13), Some(13.0));
+        assert_eq!(socket_power_watts(u32::MAX, u32::MAX), None);
     }
 }
