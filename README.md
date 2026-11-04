@@ -213,6 +213,10 @@ Telemetry needs no privileges. In a container, mount the host root read-only
 (for example at `/host`) and set `PLOWS_HOST_ROOT=/host`; `/sys` and `/proc` are
 then read from there.
 
+Partitioned GPUs are represented once per PCI device; process VRAM is summed
+across all of that device's KFD partitions. DRM process discovery also includes
+video/JPEG/DMA activity, even when buffers reside in GTT instead of VRAM.
+
 ### NixOS
 
 The NVIDIA driver must be enabled in your system configuration, otherwise there

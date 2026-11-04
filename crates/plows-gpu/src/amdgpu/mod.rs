@@ -64,8 +64,8 @@ pub(crate) struct Device {
     pub pci: PciId,
     /// 64-bit chip unique id, when the ASIC exposes one.
     pub unique_id: Option<u64>,
-    /// KFD `gpu_id`, used to key per-process KFD counters.
-    pub kfd_gpu_id: Option<u32>,
+    /// Every KFD `gpu_id` on this PCI device, including compute partitions.
+    pub kfd_gpu_ids: Vec<u32>,
     /// LLVM target, e.g. `gfx1201`.
     pub gfx_target: Option<String>,
     hwmon: Option<PathBuf>,
@@ -170,7 +170,7 @@ impl Device {
             pci_addr,
             pci,
             unique_id,
-            kfd_gpu_id: node.map(|n| n.gpu_id),
+            kfd_gpu_ids: node.map(|n| n.gpu_ids.clone()).unwrap_or_default(),
             gfx_target: node.and_then(|n| n.gfx_target_version).and_then(gfx_target),
             sclk: freq_map.get("sclk").cloned(),
             mclk: freq_map.get("mclk").cloned(),
@@ -315,13 +315,13 @@ fn gfx_target(version: u32) -> Option<String> {
 }
 
 struct KfdNode {
-    gpu_id: u32,
+    gpu_ids: Vec<u32>,
     gfx_target_version: Option<u32>,
 }
 
 /// KFD topology GPU nodes keyed by PCI address.
 fn kfd_nodes(root: &Path) -> HashMap<String, KfdNode> {
-    let mut out = HashMap::new();
+    let mut out: HashMap<String, KfdNode> = HashMap::new();
     let Ok(nodes) = fs::read_dir(root.join("sys/class/kfd/kfd/topology/nodes")) else {
         return out;
     };
@@ -348,11 +348,21 @@ fn kfd_nodes(root: &Path) -> HashMap<String, KfdNode> {
             (location >> 3) & 0x1f,
             location & 0x7
         );
-        // Partitioned parts list several nodes per PCI device; keep the first.
-        out.entry(addr).or_insert(KfdNode {
-            gpu_id: gpu_id as u32,
-            gfx_target_version: prop("gfx_target_version").map(|v| v as u32),
+        // Devices are board-level, so retain every partition for process accounting.
+        let node = out.entry(addr).or_insert(KfdNode {
+            gpu_ids: Vec::new(),
+            gfx_target_version: None,
         });
+        node.gpu_ids.push(gpu_id as u32);
+        if node.gfx_target_version.is_none() {
+            node.gfx_target_version = prop("gfx_target_version")
+                .filter(|&v| v > 0)
+                .map(|v| v as u32);
+        }
+    }
+    for node in out.values_mut() {
+        node.gpu_ids.sort_unstable();
+        node.gpu_ids.dedup();
     }
     out
 }
@@ -620,7 +630,7 @@ pub(crate) mod tests {
             ["0000:03:00.0", "0000:43:00.0"]
         );
         let d = &devs[0];
-        assert_eq!(d.kfd_gpu_id, Some(53865));
+        assert_eq!(d.kfd_gpu_ids, [53865]);
         assert_eq!(d.gfx_target.as_deref(), Some("gfx1201"));
         assert_eq!(d.uuid(), "2d007551-0000-1000-80e8-238c16749fb8");
         assert_eq!(

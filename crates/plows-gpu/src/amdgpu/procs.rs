@@ -22,6 +22,7 @@ struct Usage {
     drm_vram: u64,
     gfx_ns: u64,
     compute_ns: u64,
+    any_engine_active: bool,
 }
 
 /// One amdgpu DRM client, parsed from fdinfo.
@@ -32,6 +33,7 @@ struct DrmClient {
     vram_bytes: u64,
     gfx_ns: u64,
     compute_ns: u64,
+    any_engine_active: bool,
 }
 
 /// Processes using any of `devices`; `gpu_index` is the position in `devices`.
@@ -45,8 +47,7 @@ pub(crate) fn collect(root: &Path, devices: &[Device]) -> Vec<GpuProcessInfo> {
         .into_iter()
         .filter_map(|((pid, idx), u)| {
             let kfd = kfd_pids.contains(&pid);
-            let counted =
-                u.kfd_vram > 0 || u.gfx_ns > 0 || u.compute_ns > 0 || (!kfd && u.drm_vram > 0);
+            let counted = u.kfd_vram > 0 || u.any_engine_active || (!kfd && u.drm_vram > 0);
             if !counted {
                 return None;
             }
@@ -89,11 +90,11 @@ fn scan_kfd(
         };
         kfd_pids.insert(pid);
         for (idx, dev) in devices.iter().enumerate() {
-            let Some(gpu_id) = dev.kfd_gpu_id else {
-                continue;
-            };
-            if let Some(vram) = read_u64(&entry.path().join(format!("vram_{gpu_id}"))) {
-                usage.entry((pid, idx)).or_default().kfd_vram = vram;
+            for gpu_id in &dev.kfd_gpu_ids {
+                if let Some(vram) = read_u64(&entry.path().join(format!("vram_{gpu_id}"))) {
+                    let u = usage.entry((pid, idx)).or_default();
+                    u.kfd_vram = u.kfd_vram.saturating_add(vram);
+                }
             }
         }
     }
@@ -141,6 +142,7 @@ fn scan_drm(root: &Path, devices: &[Device], usage: &mut HashMap<(u32, usize), U
             u.drm_vram += client.vram_bytes;
             u.gfx_ns += client.gfx_ns;
             u.compute_ns += client.compute_ns;
+            u.any_engine_active |= client.any_engine_active;
         }
     }
 }
@@ -160,7 +162,7 @@ fn parse_fdinfo(text: &str) -> Option<DrmClient> {
     let ns = |key: &str| {
         fields
             .get(key)
-            .and_then(|v| v.split_whitespace().next()?.parse::<u64>().ok())
+            .and_then(|v| parse_engine_ns(v))
             .unwrap_or(0)
     };
     Some(DrmClient {
@@ -172,7 +174,18 @@ fn parse_fdinfo(text: &str) -> Option<DrmClient> {
             .unwrap_or(0),
         gfx_ns: ns("drm-engine-gfx"),
         compute_ns: ns("drm-engine-compute"),
+        // Include video, JPEG, DMA and future engines, not just graphics/compute.
+        // Require a time unit so drm-engine-capacity-* metadata isn't activity.
+        any_engine_active: fields.iter().any(|(key, value)| {
+            key.starts_with("drm-engine-") && parse_engine_ns(value).is_some_and(|ns| ns > 0)
+        }),
     })
+}
+
+fn parse_engine_ns(value: &str) -> Option<u64> {
+    let mut parts = value.split_whitespace();
+    let ns = parts.next()?.parse().ok()?;
+    (parts.next() == Some("ns") && parts.next().is_none()).then_some(ns)
 }
 
 /// `<n>`, `<n> KiB` or `<n> MiB`.
@@ -212,6 +225,7 @@ drm-engine-compute:\t123456 ns\n";
                 vram_bytes: 1192088 * 1024,
                 gfx_ns: 0,
                 compute_ns: 123456,
+                any_engine_active: true,
             })
         );
         assert_eq!(parse_fdinfo("drm-driver:\ti915\ndrm-client-id:\t1\n"), None);
@@ -220,6 +234,83 @@ drm-engine-compute:\t123456 ns\n";
         assert_eq!(parse_size("3 MiB"), Some(3 << 20));
         assert_eq!(parse_size("0"), Some(0));
         assert_eq!(parse_size("1 furlong"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn aggregates_all_kfd_partitions_without_proc_access() {
+        let host = FakeHost::new("partition-procs");
+        let addr = "0000:03:00.0";
+        // One physical device, two partitions; a repeated ID must not double count.
+        host.gpu(addr, 2, 200, "2de8238c16749fb8");
+        host.gpu(addr, 1, 100, "2de8238c16749fb8");
+        host.gpu(addr, 3, 200, "2de8238c16749fb8");
+        let devices = discover(&host.root).unwrap();
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].kfd_gpu_ids, [100, 200]);
+
+        host.write("sys/class/kfd/kfd/proc/42/vram_100", "0\n");
+        host.write("sys/class/kfd/kfd/proc/42/vram_200", "1073741824\n");
+        host.write("sys/class/kfd/kfd/proc/43/vram_100", "2147483648\n");
+        host.write("sys/class/kfd/kfd/proc/43/vram_200", "3221225472\n");
+        // Models jobs whose /proc fd tables aren't readable by the observer.
+        assert!(!host.root.join("proc").exists());
+        let procs = collect(&host.root, &devices);
+        assert_eq!(procs.len(), 2);
+        assert_eq!((procs[0].pid, procs[0].gpu_memory_bytes), (42, 1 << 30));
+        assert_eq!((procs[1].pid, procs[1].gpu_memory_bytes), (43, 5 << 30));
+        assert!(procs
+            .iter()
+            .all(|p| p.gpu_index == 0 && p.process_type == "C"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn includes_video_and_dma_clients_without_resident_vram() {
+        use std::os::unix::fs::symlink;
+        let host = FakeHost::new("video-procs");
+        host.gpu("0000:03:00.0", 1, 100, "2de8238c16749fb8");
+        let devices = discover(&host.root).unwrap();
+        let engines = ["dec", "enc", "enc_1", "jpeg", "dma", "future_engine"];
+        for (i, engine) in engines.iter().enumerate() {
+            let pid = 100 + i;
+            let dir = host.root.join(format!("proc/{pid}/fd"));
+            fs::create_dir_all(&dir).unwrap();
+            symlink("/dev/dri/renderD130", dir.join("5")).unwrap();
+            host.write(
+                &format!("proc/{pid}/fdinfo/5"),
+                &format!(
+                    "drm-driver:\tamdgpu\ndrm-client-id:\t7\ndrm-pdev:\t0000:03:00.0\n\
+                     drm-resident-vram:\t0 KiB\ndrm-memory-gtt:\t32768 KiB\n\
+                     drm-engine-{engine}:\t1000000000 ns\n"
+                ),
+            );
+        }
+        let procs = collect(&host.root, &devices);
+        assert_eq!(procs.len(), engines.len());
+        for (i, p) in procs.iter().enumerate() {
+            assert_eq!(p.pid, (100 + i) as u32);
+            assert_eq!(p.gpu_index, 0);
+            assert_eq!(p.gpu_memory_bytes, 0); // Don't mislabel GTT as VRAM.
+            assert_eq!(p.process_type, "G");
+        }
+    }
+
+    #[test]
+    fn engine_metadata_and_zero_counters_are_not_activity() {
+        let base = "drm-driver:\tamdgpu\ndrm-client-id:\t7\ndrm-pdev:\t0000:03:00.0\n";
+        for counter in [
+            "drm-engine-dec:\t0 ns\n",
+            "drm-engine-capacity-compute:\t4\n",
+            "drm-engine-enc:\tmalformed ns\n",
+            "drm-engine-dma:\t100 cycles\n",
+        ] {
+            assert!(
+                !parse_fdinfo(&format!("{base}{counter}"))
+                    .unwrap()
+                    .any_engine_active
+            );
+        }
     }
 
     #[cfg(unix)]
