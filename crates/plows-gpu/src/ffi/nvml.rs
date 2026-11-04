@@ -350,7 +350,7 @@ impl NvmlApi {
             unsafe { (self.nvml_device_get_name)(device, buf.as_mut_ptr(), buf.len() as c_uint) };
         if st == NVML_SUCCESS {
             Some(c_string_from_buf(unsafe {
-                std::slice::from_raw_parts(buf.as_ptr() as *const u8, buf.len())
+                std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), buf.len())
             }))
         } else {
             None
@@ -363,7 +363,7 @@ impl NvmlApi {
             unsafe { (self.nvml_device_get_uuid)(device, buf.as_mut_ptr(), buf.len() as c_uint) };
         if st == NVML_SUCCESS {
             Some(c_string_from_buf(unsafe {
-                std::slice::from_raw_parts(buf.as_ptr() as *const u8, buf.len())
+                std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), buf.len())
             }))
         } else {
             None
@@ -376,7 +376,7 @@ impl NvmlApi {
             unsafe { (self.nvml_device_get_serial)(device, buf.as_mut_ptr(), buf.len() as c_uint) };
         if st == NVML_SUCCESS {
             let s = c_string_from_buf(unsafe {
-                std::slice::from_raw_parts(buf.as_ptr() as *const u8, buf.len())
+                std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), buf.len())
             });
             if s.is_empty() {
                 None
@@ -393,7 +393,7 @@ impl NvmlApi {
         let st = unsafe { (self.nvml_device_get_pci_info_v3)(device, &mut info) };
         if st == NVML_SUCCESS {
             Some(c_string_from_buf(unsafe {
-                std::slice::from_raw_parts(info.bus_id.as_ptr() as *const u8, info.bus_id.len())
+                std::slice::from_raw_parts(info.bus_id.as_ptr().cast::<u8>(), info.bus_id.len())
             }))
         } else {
             None
@@ -517,7 +517,7 @@ impl NvmlApi {
         let st = unsafe { f(buf.as_mut_ptr(), buf.len() as c_uint) };
         if st == NVML_SUCCESS {
             Some(c_string_from_buf(unsafe {
-                std::slice::from_raw_parts(buf.as_ptr() as *const u8, buf.len())
+                std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), buf.len())
             }))
         } else {
             None

@@ -175,8 +175,10 @@ fn successful_symbol_resolve_on_libc() {
 #[test]
 fn discover_never_panics_on_cpu_only() {
     // On machines without GPU libs this yields an empty manager; with GPUs it
-    // may load backends. Either way it must not panic.
-    let mgr = GpuManager::discover();
+    // may load backends. Either way it must not panic. Apple's native APIs
+    // require host hardware access and can trap inside the Nix build sandbox;
+    // they are exercised separately by the opt-in live test in apple.rs.
+    let mgr = GpuManager::discover_filtered(|vendor| vendor != Vendor::Apple);
     let _ = mgr.backend_count();
     let _ = mgr.all_devices();
 }
