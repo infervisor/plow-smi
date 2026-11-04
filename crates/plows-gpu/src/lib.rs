@@ -15,6 +15,10 @@
 //! function-pointer tables. Missing libraries or symbols become
 //! [`GpuError`] values; [`GpuManager::discover`] logs and continues.
 //!
+//! AMD needs no library at all: the open `amdgpu` kernel driver publishes its
+//! telemetry and controls through sysfs, so [`AmdBackend`] reads the driver
+//! directly (see [`amdgpu`]).
+//!
 //! # How loading works
 //!
 //! 1. [`ffi::dynlib::open_first`] tries a candidate list of sonames/paths.
@@ -54,6 +58,7 @@
 #![warn(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
+pub mod amdgpu;
 pub mod backend;
 pub mod control;
 pub mod device;

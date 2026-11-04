@@ -1,4 +1,4 @@
-//! AMD GPU control via `plows-gpu` (runtime AMD SMI).
+//! AMD GPU control via `plows-gpu` (the `amdgpu` kernel driver's sysfs).
 
 use anyhow::{bail, Result};
 use colored::Colorize;
@@ -12,9 +12,9 @@ use crate::{
 fn init_backend() -> Result<AmdBackend> {
     AmdBackend::try_load().map_err(|e| {
         anyhow::anyhow!(
-            "Failed to initialize AMD SMI via plows-gpu.\n\
-             Ensure AMD GPU drivers and ROCm are installed.\n\
-             Hint: Run 'rocm-smi' to check driver status.\nError: {e}"
+            "No AMD GPU found through the amdgpu kernel driver.\n\
+             Hint: check `lsmod | grep amdgpu` and `ls /sys/bus/pci/drivers/amdgpu`.\n\
+             Error: {e}"
         )
     })
 }

@@ -1,6 +1,6 @@
 //! plows-ctl — GPU power & clock control library.
 //!
-//! Backed entirely by [`plows_gpu`] (runtime NVML / AMD SMI / Level Zero). Used as a
+//! Backed entirely by [`plows_gpu`] (runtime NVML / amdgpu sysfs / Level Zero). Used as a
 //! library by `plows-cli` or as the standalone `plows-ctl` binary.
 
 pub mod amd;

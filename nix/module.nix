@@ -145,7 +145,8 @@ in
         RestartSec = "5s";
 
         # Hardening. GPU vendor libraries are dlopen'd from the host at
-        # runtime (NVML/AMD SMI/Level Zero), so we can't fully sandbox the
+        # runtime (NVML/Level Zero) and AMD telemetry is read from /sys and
+        # /proc (amdgpu sysfs, KFD, DRM fdinfo), so we can't fully sandbox the
         # filesystem — DynamicUser is left off and /dev is left reachable
         # for GPU device nodes.
         NoNewPrivileges = true;

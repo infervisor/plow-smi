@@ -32,5 +32,5 @@ surface, the TUI, the power/clock control paths, and build/packaging (Cargo,
 Nix) shipped in this repository.
 
 Out of scope (unless Plow SMI is clearly at fault): third-party GPU vendor
-drivers/libraries (`libnvidia-ml`, `libamd_smi`, `libze_loader`), or issues
+drivers/libraries (`libnvidia-ml`, the `amdgpu` kernel driver, `libze_loader`), or issues
 that require physical or privileged host access beyond normal deployment.

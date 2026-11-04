@@ -25,6 +25,11 @@ pub enum GpuError {
         library: String,
     },
 
+    /// The vendor's kernel driver is absent or drives no device. Like
+    /// [`GpuError::LibraryNotFound`], expected on hosts without that vendor.
+    #[error("no devices: {0}")]
+    NoDevices(String),
+
     /// The vendor API initialized but returned a failure status.
     #[error("GPU initialization failed: {0}")]
     InitializationFailed(String),

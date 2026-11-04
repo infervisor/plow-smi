@@ -64,6 +64,11 @@ class PackagingTests(unittest.TestCase):
             (glibc / "lib" / "libc.so.6").write_bytes(b"libc")
             (gcc / "lib" / "libgcc_s.so.1").write_bytes(b"libgcc")
             (sources / "licenses" / "COPYING.LIB").write_text("LGPL")
+            # Nix source derivations contain read-only files and directories.
+            source_licenses = sources / "licenses"
+            (source_licenses / "README").write_text("source license index")
+            (source_licenses / "README").chmod(0o444)
+            source_licenses.chmod(0o555)
             args = SimpleNamespace(workspace=workspace, glibc=glibc, gcc_lib=gcc,
                                    runtime_sources=sources, system="aarch64-linux", version="0.1.0")
 
@@ -73,11 +78,15 @@ class PackagingTests(unittest.TestCase):
             def run(*args):
                 return str(loader) if args[:2] == ("patchelf", "--print-interpreter") else ""
 
-            with patch.object(packaging, "elf_info", side_effect=elf_info), \
-                    patch.object(packaging, "run", side_effect=run) as commands:
-                packaging.bundle_linux(args, root)
+            try:
+                with patch.object(packaging, "elf_info", side_effect=elf_info), \
+                        patch.object(packaging, "run", side_effect=run) as commands:
+                    packaging.bundle_linux(args, root)
+            finally:
+                source_licenses.chmod(0o755)
             self.assertEqual((root / "lib" / "libc.so.6").read_bytes(), b"libc")
             self.assertEqual((root / "licenses" / "COPYING.LIB").read_text(), "LGPL")
+            self.assertIn("Corresponding source", (root / "licenses" / "README").read_text())
             self.assertFalse(any(c.args[-1] == str(root / "lib" / "ld.so") for c in commands.call_args_list))
             for name in packaging.BINARIES:
                 launcher = root / "bin" / name

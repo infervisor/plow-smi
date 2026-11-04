@@ -117,6 +117,11 @@ exec "$root/lib/ld.so" --library-path "$root/lib${{LD_LIBRARY_PATH:+:$LD_LIBRARY
     # Corresponding sources (including licenses) are a separate release asset.
     license_dir = root / "licenses"
     shutil.copytree(args.runtime_sources / "licenses", license_dir)
+    # copytree preserves the Nix store's read-only modes. Only our generated
+    # README is rewritten; leave the copied license texts untouched.
+    license_dir.chmod(0o755)
+    (license_dir / "README").touch(exist_ok=True)
+    (license_dir / "README").chmod(0o644)
     (license_dir / "README").write_text(
         "glibc runtime: LGPL-2.1-or-later.\n"
         "GCC runtime (libgcc_s, if needed): GPL-3.0-or-later with GCC Runtime Library Exception.\n"

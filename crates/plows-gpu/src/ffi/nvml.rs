@@ -29,6 +29,20 @@ pub struct NvmlMemory {
     pub used: c_ulonglong,
 }
 
+/// `nvmlMemory_v2_t`: `used` excludes the driver's `reserved` memory.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct NvmlMemoryV2 {
+    pub version: c_uint,
+    pub total: c_ulonglong,
+    pub reserved: c_ulonglong,
+    pub free: c_ulonglong,
+    pub used: c_ulonglong,
+}
+
+/// `nvmlMemory_v2` = `NVML_STRUCT_VERSION(Memory, 2)`.
+const NVML_MEMORY_V2: c_uint = std::mem::size_of::<NvmlMemoryV2>() as c_uint | (2 << 24);
+
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct NvmlUtilization {
@@ -69,6 +83,8 @@ pub struct NvmlApi {
     nvml_device_get_serial: unsafe extern "C" fn(NvmlDevice, *mut c_char, c_uint) -> u32,
     nvml_device_get_pci_info_v3: unsafe extern "C" fn(NvmlDevice, *mut NvmlPciInfo) -> u32,
     nvml_device_get_memory_info: unsafe extern "C" fn(NvmlDevice, *mut NvmlMemory) -> u32,
+    nvml_device_get_memory_info_v2:
+        Option<unsafe extern "C" fn(NvmlDevice, *mut NvmlMemoryV2) -> u32>,
     nvml_device_get_utilization_rates:
         unsafe extern "C" fn(NvmlDevice, *mut NvmlUtilization) -> u32,
     nvml_device_get_temperature: unsafe extern "C" fn(NvmlDevice, u32, *mut c_uint) -> u32,
@@ -195,6 +211,10 @@ impl NvmlApi {
                     b"nvmlDeviceGetClockInfo\0",
                     library,
                 )?,
+                nvml_device_get_memory_info_v2: dynlib::resolve_optional(
+                    &lib,
+                    b"nvmlDeviceGetMemoryInfo_v2\0",
+                ),
                 nvml_device_get_architecture: dynlib::resolve_optional(
                     &lib,
                     b"nvmlDeviceGetArchitecture\0",
@@ -330,7 +350,7 @@ impl NvmlApi {
             unsafe { (self.nvml_device_get_name)(device, buf.as_mut_ptr(), buf.len() as c_uint) };
         if st == NVML_SUCCESS {
             Some(c_string_from_buf(unsafe {
-                std::slice::from_raw_parts(buf.as_ptr() as *const u8, buf.len())
+                std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), buf.len())
             }))
         } else {
             None
@@ -343,7 +363,7 @@ impl NvmlApi {
             unsafe { (self.nvml_device_get_uuid)(device, buf.as_mut_ptr(), buf.len() as c_uint) };
         if st == NVML_SUCCESS {
             Some(c_string_from_buf(unsafe {
-                std::slice::from_raw_parts(buf.as_ptr() as *const u8, buf.len())
+                std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), buf.len())
             }))
         } else {
             None
@@ -356,7 +376,7 @@ impl NvmlApi {
             unsafe { (self.nvml_device_get_serial)(device, buf.as_mut_ptr(), buf.len() as c_uint) };
         if st == NVML_SUCCESS {
             let s = c_string_from_buf(unsafe {
-                std::slice::from_raw_parts(buf.as_ptr() as *const u8, buf.len())
+                std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), buf.len())
             });
             if s.is_empty() {
                 None
@@ -373,14 +393,30 @@ impl NvmlApi {
         let st = unsafe { (self.nvml_device_get_pci_info_v3)(device, &mut info) };
         if st == NVML_SUCCESS {
             Some(c_string_from_buf(unsafe {
-                std::slice::from_raw_parts(info.bus_id.as_ptr() as *const u8, info.bus_id.len())
+                std::slice::from_raw_parts(info.bus_id.as_ptr().cast::<u8>(), info.bus_id.len())
             }))
         } else {
             None
         }
     }
 
+    /// Memory in bytes. `used` excludes driver-reserved memory when the
+    /// driver has `nvmlDeviceGetMemoryInfo_v2` (R510+), as `nvidia-smi` does;
+    /// v1 folds the reservation into `used`.
     pub fn memory_info(&self, device: NvmlDevice) -> Option<NvmlMemory> {
+        if let Some(f) = self.nvml_device_get_memory_info_v2 {
+            let mut mem = NvmlMemoryV2 {
+                version: NVML_MEMORY_V2,
+                ..Default::default()
+            };
+            if unsafe { f(device, &mut mem) } == NVML_SUCCESS {
+                return Some(NvmlMemory {
+                    total: mem.total,
+                    free: mem.free,
+                    used: mem.used,
+                });
+            }
+        }
         let mut mem = NvmlMemory::default();
         let st = unsafe { (self.nvml_device_get_memory_info)(device, &mut mem) };
         if st == NVML_SUCCESS {
@@ -481,7 +517,7 @@ impl NvmlApi {
         let st = unsafe { f(buf.as_mut_ptr(), buf.len() as c_uint) };
         if st == NVML_SUCCESS {
             Some(c_string_from_buf(unsafe {
-                std::slice::from_raw_parts(buf.as_ptr() as *const u8, buf.len())
+                std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), buf.len())
             }))
         } else {
             None
@@ -790,5 +826,11 @@ mod tests {
     fn process_layout_matches_nvml_v2_v3_abi() {
         assert_eq!(std::mem::size_of::<NvmlProcessInfo>(), 24);
         assert_eq!(std::mem::offset_of!(NvmlProcessInfo, used_gpu_memory), 8);
+    }
+    #[test]
+    fn memory_v2_layout_matches_nvml_h() {
+        assert_eq!(std::mem::size_of::<NvmlMemoryV2>(), 40);
+        assert_eq!(std::mem::offset_of!(NvmlMemoryV2, used), 32);
+        assert_eq!(NVML_MEMORY_V2, 0x0200_0028);
     }
 }

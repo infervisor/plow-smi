@@ -1,6 +1,6 @@
 # Architecture
 
-Plow SMI is a Cargo workspace centered on a single GPU abstraction crate that loads vendor libraries at runtime.
+Plow SMI is a Cargo workspace centered on a single GPU abstraction crate that loads vendor libraries at runtime, or reads the kernel driver directly where it publishes everything (AMD).
 
 ## High-level layout
 
@@ -19,8 +19,11 @@ flowchart TB
 
   subgraph so [Runtime shared libraries]
     NVML[libnvidia-ml.so.1]
-    AMD[libamd_smi.so]
     ZE[libze_loader.so]
+  end
+
+  subgraph kernel [Kernel driver ABI]
+    AMDGPU[amdgpu sysfs / KFD / DRM fdinfo]
   end
 
   CLI --> EXP
@@ -31,7 +34,7 @@ flowchart TB
   TOP --> GPU
   CTL --> GPU
   GPU -->|dlopen| NVML
-  GPU -->|dlopen| AMD
+  GPU -->|read/write files| AMDGPU
   GPU -->|dlopen| ZE
 ```
 
@@ -54,8 +57,17 @@ crates/plows-gpu/src/
   loader.rs          GpuManager::discover()
   error.rs
   backend/           NvidiaBackend, AmdBackend, IntelBackend
-  ffi/               dynlib + NVML / AMD SMI / Level Zero ABI
+  ffi/               dynlib + NVML / Level Zero ABI
+  amdgpu/            amdgpu sysfs + hwmon, KFD topology/process VRAM, DRM fdinfo, pci.ids
 ```
+
+**AMD without FFI:** NVIDIA's driver is closed, so NVML is the only way in. The
+`amdgpu` driver is open and publishes telemetry and controls as sysfs files, which
+is what `libamd_smi` reads underneath. `AmdBackend` reads them directly: no
+`dlopen`, no `unsafe`, no ROCm. Paths are resolved once at discovery and every
+refresh is a handful of small file reads per GPU. All paths sit under a host root
+(`PLOWS_HOST_ROOT`, default `/`), which also lets the unit tests run against a
+fake sysfs tree.
 
 **Discovery:** try NVIDIA, AMD, and Intel independently. Successes stay active together.
 
@@ -63,7 +75,7 @@ crates/plows-gpu/src/
 
 - Metrics: `utilization`, memory, temperature, power, fan, clocks
 - Identity: uuid, model, PCI bus id, serial
-- Processes: NVML compute/graphics occupancy
+- Processes: NVML compute/graphics occupancy; amdgpu KFD + DRM fdinfo
 - Control (NVIDIA/AMD): power limit, application clocks, perf level, reset
 
 **Unsafe** driver calls stay in `ffi/`; backend thread-safety implementations are documented alongside their handles. Callers use owned Rust types only.
@@ -90,7 +102,7 @@ Filtered discovery probes only selected vendors, avoiding unused sampler threads
 
 ## Adding a vendor
 
-1. `ffi/<vendor>.rs` — ABI + `load()` + symbol table  
+1. `ffi/<vendor>.rs` — ABI + `load()` + symbol table (or a driver-file module like `amdgpu/`)  
 2. `backend/<vendor>.rs` — implement `GpuBackend` (+ control if needed)  
 3. Register in `GpuManager::discover`  
 4. Extend `Vendor` (`#[non_exhaustive]`)  
@@ -99,7 +111,7 @@ Public `GpuBackend` / `GpuManager` APIs stay stable.
 
 ## What was removed
 
-Former crates **`is-nvidia`** (`nvml-wrapper`) and **`is-amd-ffi`** are gone. All telemetry and control go through **`plows-gpu`** dlopen paths so the workspace has one GPU integration layer.
+Former crates **`is-nvidia`** (`nvml-wrapper`) and **`is-amd-ffi`** are gone. All telemetry and control go through **`plows-gpu`** so the workspace has one GPU integration layer. The runtime-loaded AMD SMI path was later replaced by direct `amdgpu` driver reads.
 
 Both exporter binaries call `plows_exporter::server::run`. Blocking OS/driver
 collection and Prometheus encoding use a bounded blocking pool, leaving HTTP

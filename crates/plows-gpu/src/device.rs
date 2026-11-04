@@ -10,7 +10,7 @@
 pub enum Vendor {
     /// NVIDIA (NVML / `libnvidia-ml`).
     Nvidia,
-    /// AMD (AMD SMI / `libamd_smi`).
+    /// AMD (`amdgpu` kernel driver via sysfs).
     Amd,
     /// Intel (Level Zero Sysman / `libze_loader`).
     Intel,

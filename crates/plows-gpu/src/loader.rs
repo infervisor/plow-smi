@@ -46,8 +46,8 @@ impl GpuManager {
                     info!(devices = b.device_count(), "Loaded AMD backend");
                     backends.push(Box::new(b));
                 }
-                Err(GpuError::LibraryNotFound { .. }) => {
-                    info!("Missing AMD SMI");
+                Err(GpuError::NoDevices(reason)) => {
+                    info!(%reason, "No amdgpu devices");
                 }
                 Err(e) => {
                     warn!(error = %e, "AMD backend unavailable");

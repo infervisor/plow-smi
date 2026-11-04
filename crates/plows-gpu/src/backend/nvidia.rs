@@ -88,6 +88,7 @@ impl GpuBackend for NvidiaBackend {
             }
             if let Some(mem) = self.api.memory_info(h) {
                 slot.metrics.memory_used = Some(mem.used);
+                slot.metrics.memory_free = Some(mem.free);
                 slot.metrics.memory_total = Some(mem.total);
                 slot.identity.memory_total = Some(mem.total);
             }
@@ -120,6 +121,10 @@ impl GpuBackend for NvidiaBackend {
 
     fn memory_used(&self, id: usize) -> Option<u64> {
         self.slots.get(id).and_then(|s| s.metrics.memory_used)
+    }
+
+    fn memory_free(&self, id: usize) -> Option<u64> {
+        self.slots.get(id).and_then(|s| s.metrics.memory_free)
     }
 
     fn memory_total(&self, id: usize) -> Option<u64> {

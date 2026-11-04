@@ -577,14 +577,14 @@ pub fn format_uuid(uuid: &[u8; 16]) -> String {
 /// Read device name from core properties.
 pub fn props_name(props: &ZeDeviceProperties) -> String {
     c_string_from_buf(unsafe {
-        std::slice::from_raw_parts(props.name.as_ptr() as *const u8, props.name.len())
+        std::slice::from_raw_parts(props.name.as_ptr().cast::<u8>(), props.name.len())
     })
 }
 
 /// Decode a Sysman C string field, treating `"unknown"` as absent.
 pub fn zes_string(buf: &[c_char]) -> Option<String> {
     let s = c_string_from_buf(unsafe {
-        std::slice::from_raw_parts(buf.as_ptr() as *const u8, buf.len())
+        std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), buf.len())
     });
     if s.is_empty() || s.eq_ignore_ascii_case("unknown") {
         None

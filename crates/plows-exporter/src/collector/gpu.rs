@@ -1,4 +1,4 @@
-//! Unified GPU collector backed by `plows-gpu` (NVML / AMD SMI / Level Zero).
+//! Unified GPU collector backed by `plows-gpu` (NVML / amdgpu sysfs / Level Zero).
 
 use std::sync::Mutex;
 
@@ -191,9 +191,10 @@ impl Collector for GpuCollector {
                 snap.memory_utilization_percent = m.memory_utilization.map(|v| v as i64);
                 snap.memory_total_bytes = m.memory_total;
                 snap.memory_used_bytes = m.memory_used;
-                if let (Some(total), Some(used)) = (m.memory_total, m.memory_used) {
-                    snap.memory_free_bytes = Some(total.saturating_sub(used));
-                }
+                snap.memory_free_bytes = m.memory_free.or_else(|| {
+                    let (total, used) = (m.memory_total?, m.memory_used?);
+                    Some(total.saturating_sub(used))
+                });
                 snap.power_usage_mw = m.power_usage.map(|w| (w * 1000.0) as u64);
                 snap.power_limit_mw = m.power_limit.map(|w| (w * 1000.0) as u64);
                 snap.clock_core_mhz = m.clock_graphics;

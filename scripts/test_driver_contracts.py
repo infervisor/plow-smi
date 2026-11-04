@@ -70,5 +70,56 @@ class NvmlControlTests(unittest.TestCase):
         self.assertFalse(self.marker.exists())
 
 
+@unittest.skipUnless(sys.platform == 'linux' and os.environ.get('PLOW_TEST_BIN_DIR'),
+                     'requires Linux and PLOW_TEST_BIN_DIR')
+class AmdgpuControlTests(unittest.TestCase):
+    """plows-ctl against a fake amdgpu sysfs tree; writes land in its files."""
+
+    def setUp(self):
+        from fake_amdgpu import make_gpu
+        self.temp = tempfile.TemporaryDirectory(prefix='plow-amdgpu-contract-')
+        self.root = Path(self.temp.name)
+        self.hwmon = make_gpu(self.root)
+        self.perf = self.root / 'sys/bus/pci/devices/0000:03:00.0/power_dpm_force_performance_level'
+        self.binary = str(Path(os.environ['PLOW_TEST_BIN_DIR']).resolve() / 'plows-ctl')
+        self.env = {**os.environ, 'PLOWS_HOST_ROOT': str(self.root)}
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def run_ctl(self, *args):
+        return subprocess.run([self.binary, 'amd', *args], capture_output=True, text=True,
+                              env=self.env, timeout=15)
+
+    def cap(self):
+        return (self.hwmon / 'power1_cap').read_text().strip()
+
+    def test_list_reports_driver_telemetry(self):
+        result = self.run_ctl('list', '--format', 'json')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        [gpu] = json.loads(result.stdout)
+        self.assertEqual(gpu['uuid'], '2d007551-0000-1000-80e8-238c16749fb8')
+        self.assertEqual((gpu['temperature_c'], gpu['power_w'], gpu['power_limit_w']), (31, 13, 300))
+
+    def test_power_limit_writes_microwatts_within_range(self):
+        result = self.run_ctl('set-power-limit', '0', '--watts', '250', '--format', 'json')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.cap(), '250000000')
+        self.assertEqual(json.loads(result.stdout)['actual'], 250)
+        for watts in ('100', '301'):
+            self.assertNotEqual(self.run_ctl('set-power-limit', '0', '--watts', watts).returncode, 0)
+        self.assertEqual(self.cap(), '250000000')
+
+    def test_perf_level_and_reset(self):
+        self.assertEqual(self.run_ctl('set-perf', '--all', '--level', 'high').returncode, 0)
+        self.assertEqual(self.perf.read_text(), 'high')
+        self.assertEqual(self.run_ctl('reset', '0').returncode, 0)
+        self.assertEqual(self.perf.read_text(), 'auto')
+
+    def test_missing_device_fails_without_writing(self):
+        self.assertNotEqual(self.run_ctl('set-power-limit', '1', '--watts', '250').returncode, 0)
+        self.assertEqual(self.cap(), '300000000')
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -9,7 +9,7 @@ description = "Professional GPU metrics exporter for Prometheus (AMD, NVIDIA, In
 
 [features]
 default = ["gpu", "system"]
-# Unified runtime GPU backends via plows-gpu (NVML / AMD SMI / Level Zero).
+# Unified runtime GPU backends via plows-gpu (NVML / amdgpu sysfs / Level Zero).
 gpu = []
 # Legacy aliases kept so existing `--features nvidia/amd` command lines keep working.
 nvidia = ["gpu"]
@@ -47,7 +47,7 @@ once_cell = "1"
 # Hostname detection
 whoami = "1"
 
-# Unified GPU metrics (dlopen NVML / AMD SMI / Level Zero)
+# Unified GPU metrics (NVML / amdgpu sysfs / Level Zero)
 plows-gpu = { path = "../plows-gpu" }
 
 # Optional: System metrics

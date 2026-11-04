@@ -1,4 +1,4 @@
-//! Process occupancy information for GPUs that expose it (NVML today).
+//! Process occupancy information for GPUs that expose it (NVML, amdgpu).
 
 /// A process consuming GPU resources.
 #[derive(Debug, Clone, PartialEq, Eq)]
