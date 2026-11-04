@@ -137,6 +137,7 @@ impl GpuBackend for AmdBackend {
                 utilization: s.busy_percent,
                 memory_utilization: s.mem_busy_percent,
                 memory_used: s.vram_used,
+                memory_free: None,
                 memory_total: s.vram_total,
                 temperature: s.temperature_c,
                 power_usage: s.power_w,

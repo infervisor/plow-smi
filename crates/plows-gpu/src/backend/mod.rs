@@ -16,6 +16,7 @@ pub(crate) struct CachedMetrics {
     pub utilization: Option<f32>,
     pub memory_utilization: Option<f32>,
     pub memory_used: Option<u64>,
+    pub memory_free: Option<u64>,
     pub memory_total: Option<u64>,
     pub temperature: Option<f32>,
     pub power_usage: Option<f32>,

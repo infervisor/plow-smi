@@ -66,6 +66,10 @@ pub struct DeviceMetrics {
     pub memory_utilization: Option<f32>,
     /// Memory used in bytes.
     pub memory_used: Option<u64>,
+    /// Memory available for allocation in bytes, when the driver reports it
+    /// separately (NVML's excludes driver-reserved memory). Otherwise derive
+    /// it as total minus used.
+    pub memory_free: Option<u64>,
     /// Memory total in bytes.
     pub memory_total: Option<u64>,
     /// Temperature in Celsius.
@@ -117,6 +121,12 @@ pub trait GpuBackend: Send + Sync {
     /// Total device memory in bytes.
     fn memory_total(&self, id: usize) -> Option<u64>;
 
+    /// Allocatable device memory in bytes, when the driver reports it.
+    fn memory_free(&self, id: usize) -> Option<u64> {
+        let _ = id;
+        None
+    }
+
     /// Temperature in degrees Celsius.
     fn temperature(&self, id: usize) -> Option<f32>;
 
@@ -167,6 +177,7 @@ pub trait GpuBackend: Send + Sync {
             utilization: self.utilization(id),
             memory_utilization: self.memory_utilization(id),
             memory_used: self.memory_used(id),
+            memory_free: self.memory_free(id),
             memory_total: self.memory_total(id),
             temperature: self.temperature(id),
             power_usage: self.power_usage(id),
