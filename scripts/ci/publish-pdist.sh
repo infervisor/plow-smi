@@ -17,7 +17,7 @@
 # Needs aws (with conditional writes), jq and sha256sum. Credentials:
 # CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_R2_BUCKET, CLOUDFLARE_R2_ACCESS_KEY_ID,
 # CLOUDFLARE_R2_SECRET_ACCESS_KEY. PDIST_S3_ENDPOINT replaces the R2 endpoint
-# (for the self-test).
+# (for testing against a local S3 server).
 set -euo pipefail
 [ "$#" -eq 3 ] || { echo "usage: publish-pdist.sh <archives dir> <version> <commit>" >&2; exit 1; }
 archives="$1" version="$2" commit="$3"
