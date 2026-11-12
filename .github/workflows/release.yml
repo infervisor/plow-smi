@@ -32,8 +32,10 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Test the version rule
-        run: bash scripts/ci/release-version-selftest.sh
+      - name: Test the release scripts
+        run: |
+          bash scripts/ci/release-version-selftest.sh
+          bash scripts/ci/pdist-release-selftest.sh
       - name: Decide the version
         id: version
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -180,6 +182,5 @@ jobs:
             | PLOWRT_INSTALL_DIR="$RUNNER_TEMP/bin" sh
           args=()
           while IFS= read -r dir; do args+=(--release "$dir"); done < <(
-            python3 scripts/pdist-release.py artifacts "$RUNNER_TEMP/pdist" \
-              --version "$NEXT" --commit "$COMMIT")
+            bash scripts/ci/pdist-release.sh artifacts "$RUNNER_TEMP/pdist" "$NEXT" "$COMMIT")
           "$RUNNER_TEMP/bin/plowrt" push-runtime --name plow-smi "${args[@]}"
