@@ -32,10 +32,8 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Test the release scripts
-        run: |
-          bash scripts/ci/release-version-selftest.sh
-          bash scripts/ci/pdist-release-selftest.sh
+      - name: Test the version rule
+        run: bash scripts/ci/release-version.sh --self-test
       - name: Decide the version
         id: version
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -166,21 +164,14 @@ jobs:
           fi
           gh release edit "v$NEXT" --draft=false
       # The same archives, under v1/plow-smi/<version>/<triple>/ on pdist.
-      # `plowrt push-runtime` is the registry's one publisher: version
-      # directories are create-only, so a re-run adopts what is there.
+      # Version directories are create-only, so a re-run adopts what is there.
       - name: Publish to the registry
         env:
           COMMIT: ${{ steps.tag.outputs.commit }}
-          # Unset means the latest released plowrt.
-          PLOWRT_VERSION: ${{ vars.PLOWRT_VERSION }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_R2_BUCKET: ${{ secrets.CLOUDFLARE_R2_BUCKET }}
           CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
           CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
         run: |
-          curl -fsSL https://pdist.infervisor.ai/install.sh \
-            | PLOWRT_INSTALL_DIR="$RUNNER_TEMP/bin" sh
-          args=()
-          while IFS= read -r dir; do args+=(--release "$dir"); done < <(
-            bash scripts/ci/pdist-release.sh artifacts "$RUNNER_TEMP/pdist" "$NEXT" "$COMMIT")
-          "$RUNNER_TEMP/bin/plowrt" push-runtime --name plow-smi "${args[@]}"
+          nix shell --inputs-from . nixpkgs#awscli2 nixpkgs#jq \
+            --command bash scripts/ci/publish-pdist.sh artifacts "$NEXT" "$COMMIT"

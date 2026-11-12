@@ -135,8 +135,8 @@ A merge to `main` is a release; nobody edits a version or pushes a tag by hand:
    tag only, so `main`'s `Cargo.toml` lags the tags.
 4. Archives and `SHA256SUMS` go to GitHub Releases, and the platform archives
    go to pdist under `v1/plow-smi/<version>/<triple>/` with `index.json` and
-   `latest`, written by `plowrt push-runtime --name plow-smi`. A published
-   version is never overwritten.
+   `latest`, written by `scripts/ci/publish-pdist.sh` (the AWS CLI against
+   R2). A published version is never overwritten.
 
 For a minor or major release, run `nix run .#bump -- X.Y.0` and merge it. The
 registry credentials are the `pdist` environment's secrets
