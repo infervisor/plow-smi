@@ -1,22 +1,47 @@
 name: Nix builds and releases
 
+# A merge to main is a release: CI picks the next version, bumps it with
+# `nix run .#bump`, builds and tests every platform at that version, tags it,
+# and publishes to GitHub Releases and to the registry (pdist). Nobody edits a
+# version or pushes a tag by hand.
 on:
   push:
-    branches: [main, master]
-    tags: ['v*']
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# A run on main ends in a release, so it is never cancelled part-way.
 concurrency:
   group: nix-release-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # The version a push to main releases; empty for every other run, which
+  # builds and tests the version in Cargo.toml and publishes nothing.
+  version:
+    name: Release version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      next: ${{ steps.version.outputs.next }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Test the version rule
+        run: bash scripts/ci/release-version-selftest.sh
+      - name: Decide the version
+        id: version
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: echo "next=$(bash scripts/ci/release-version.sh)" >> "$GITHUB_OUTPUT"
+
   build:
     name: ${{ matrix.system }}
+    needs: version
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:
@@ -33,25 +58,24 @@ jobs:
             runner: macos-15
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - uses: cachix/install-nix-action@v31
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Validate platform and release version
+      - name: Validate platform
         env:
           EXPECTED_SYSTEM: ${{ matrix.system }}
-          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-        run: |
-          test "$(nix eval --impure --raw --expr builtins.currentSystem)" = "$EXPECTED_SYSTEM"
-          python3 - <<'PY'
-          import os, pathlib, tomllib
-          version = tomllib.loads(pathlib.Path('Cargo.toml').read_text())['workspace']['package']['version']
-          tag = os.environ['RELEASE_TAG']
-          if tag and tag != f'v{version}':
-              raise SystemExit(f'Tag {tag!r} must match Cargo workspace version v{version}')
-          PY
+        run: test "$(nix eval --impure --raw --expr builtins.currentSystem)" = "$EXPECTED_SYSTEM"
+      # Every platform builds the version the publish job will tag.
+      - name: Bump to the release version
+        if: needs.version.outputs.next != ''
+        env:
+          NEXT: ${{ needs.version.outputs.next }}
+        run: nix run .#bump -- "$NEXT"
       - name: Test release tooling
         run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
       - name: Build and test workspace
@@ -80,30 +104,82 @@ jobs:
           compression-level: 0
 
   publish:
-    name: Publish GitHub release
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    name: Publish release
+    if: needs.version.outputs.next != ''
+    needs: [version, build]
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
+    # The registry credentials are this environment's secrets, so no other job
+    # and no pull request can read them.
+    environment: pdist
     permissions:
       contents: write
+    env:
+      NEXT: ${{ needs.version.outputs.next }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      # The bump commit is kept by its tag only and never reaches main. The
+      # tag reserves the version before anything is uploaded.
+      - name: Bump, commit and tag
+        id: tag
+        run: |
+          git fetch --tags --force --quiet origin
+          if git rev-parse -q --verify "refs/tags/v$NEXT" >/dev/null; then
+            # Only a re-run of this job finds its tag there already.
+            tagged="$(git rev-parse "v$NEXT^{commit}")"
+            test "$tagged" = "$GITHUB_SHA" || test "$(git rev-parse "$tagged^")" = "$GITHUB_SHA"
+          else
+            nix run .#bump -- "$NEXT"
+            git add Cargo.toml Cargo.lock
+            if ! git diff --cached --quiet; then
+              git -c user.name="github-actions[bot]" \
+                -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+                commit --quiet -m "plow-smi: v$NEXT [skip ci]"
+            fi
+            git tag "v$NEXT"
+            git push origin "refs/tags/v$NEXT"
+          fi
+          echo "commit=$(git rev-parse --short=12 "v$NEXT^{commit}")" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v4
         with:
           pattern: plow-smi-*
           merge-multiple: true
           path: artifacts
-      - name: Verify checksums and publish
+      - name: Verify checksums and publish the GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
         working-directory: artifacts
         run: |
           sha256sum --check ./*.sha256
           cat ./*.sha256 | sort -k2 > SHA256SUMS
-          prerelease=()
-          if [[ "$RELEASE_TAG" == *-* ]]; then prerelease=(--prerelease); fi
-          gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes \
-            --title "Plow SMI $RELEASE_TAG" "${prerelease[@]}" ./*.tar.gz SHA256SUMS
-          gh release edit "$RELEASE_TAG" --draft=false
+          if ! gh release view "v$NEXT" >/dev/null 2>&1; then
+            gh release create "v$NEXT" --verify-tag --draft --generate-notes \
+              --title "Plow SMI v$NEXT" ./*.tar.gz SHA256SUMS
+          fi
+          gh release edit "v$NEXT" --draft=false
+      # The same archives, under v1/plow-smi/<version>/<triple>/ on pdist.
+      # `plowrt push-runtime` is the registry's one publisher: version
+      # directories are create-only, so a re-run adopts what is there.
+      - name: Publish to the registry
+        env:
+          COMMIT: ${{ steps.tag.outputs.commit }}
+          # Unset means the latest released plowrt.
+          PLOWRT_VERSION: ${{ vars.PLOWRT_VERSION }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_R2_BUCKET: ${{ secrets.CLOUDFLARE_R2_BUCKET }}
+          CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+        run: |
+          curl -fsSL https://pdist.infervisor.ai/install.sh \
+            | PLOWRT_INSTALL_DIR="$RUNNER_TEMP/bin" sh
+          args=()
+          while IFS= read -r dir; do args+=(--release "$dir"); done < <(
+            python3 scripts/pdist-release.py artifacts "$RUNNER_TEMP/pdist" \
+              --version "$NEXT" --commit "$COMMIT")
+          "$RUNNER_TEMP/bin/plowrt" push-runtime --name plow-smi "${args[@]}"
