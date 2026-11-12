@@ -1342,6 +1342,7 @@ dependencies = [
  "plows-gpu",
  "prometheus",
  "reqwest",
+ "socket2",
  "sysinfo",
  "thiserror",
  "tokio",

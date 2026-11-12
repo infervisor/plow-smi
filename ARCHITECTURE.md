@@ -95,6 +95,24 @@ metrics remain absent. See [DESIGN_APPLE_SILICON.md](DESIGN_APPLE_SILICON.md).
 | **plows-ctl** | `NvidiaBackend` / `AmdBackend` directly for list/info/set |
 | **plows-cli** | Thin subcommands over exporter / top / ctl |
 
+## Network collectors (exporter)
+
+Three collectors outside the GPU path, in `collector/{network,wireguard,probe}.rs`
+with their Prometheus side in `metrics/*_metrics.rs`:
+
+| Collector | Source | When it reads |
+|---|---|---|
+| network | `/sys/class/net` | At scrape time |
+| wireguard | `wg show all dump` (parsed; keys dropped) | Own thread, every `--interval` |
+| probe | ICMP echo on a ping or raw socket | Own thread, every `--probe-interval-ms` |
+
+They implement `prometheus::core::Collector` directly (`metrics/family.rs`)
+instead of using `*Vec` statics. Each scrape builds the families from the
+latest reading, so counters are true counters with the kernel's value, and a
+vanished interface, peer or target leaves the output. The WireGuard and probe
+threads are plain OS threads, so they never occupy the runtime's four blocking
+workers. The prober reads the WireGuard snapshot to find peer targets.
+
 ## Vendor filter (exporter)
 
 CLI flags `--nvidia`, `--amd`, `--intel`, `--apple`, `--all` map to `VendorFilter`.

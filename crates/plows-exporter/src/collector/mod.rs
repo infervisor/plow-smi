@@ -1,6 +1,11 @@
 //! Collector trait and shared types for GPU/system metric collection.
 
 pub mod manager;
+pub mod network;
+pub mod wireguard;
+
+#[cfg(feature = "probe")]
+pub mod probe;
 
 #[cfg(feature = "gpu")]
 pub mod gpu;

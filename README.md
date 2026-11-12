@@ -237,6 +237,23 @@ Run `sudo nixos-rebuild switch` and reboot. NixOS exposes the driver's userspace
 libraries under `/run/opengl-driver/lib`, which is outside the default loader
 path; plow-smi searches it automatically, so `LD_LIBRARY_PATH` is not needed.
 
+### Network and WireGuard
+
+The exporter also reports interface counters (bytes, packets, errors, drops,
+link state), WireGuard peers (last handshake, transfer) and ICMP probes (loss,
+round-trip time):
+
+```bash
+# Interfaces and WireGuard (wg needs CAP_NET_ADMIN, so run as root)
+sudo plows-exporter --network --wireguard
+# Also ping every WireGuard peer, and one extra address
+sudo plows-exporter --all --probe-wireguard-peers --probe 10.100.0.1
+```
+
+`--all` includes interfaces and WireGuard but never probes, since probes send
+traffic. The series, labels and example queries are in
+[crates/plows-exporter/README.md](crates/plows-exporter/README.md).
+
 ### Troubleshooting: GPU not detected
 
 1. Run `nvidia-smi`, or for AMD `ls /sys/bus/pci/drivers/amdgpu`. If it is missing or fails,
@@ -255,6 +272,7 @@ path; plow-smi searches it automatically, so `LD_LIBRARY_PATH` is not needed.
 - Apple Silicon SoC telemetry: CPU/GPU/ANE power, per-cluster CPU tiers, sensors, unified memory (no sudo)
 - Runtime backend discovery (multiple vendors active at once)
 - Prometheus metrics with per-device labels
+- Network interface counters, WireGuard peer health and ICMP loss/RTT probes
 - TUI with GPU + system + process view
 - Power limits / clocks / perf levels (NVIDIA + AMD; needs privileges). Apple Silicon is read-only
 - Structured logging via `tracing`
