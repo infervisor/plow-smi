@@ -240,10 +240,12 @@ path; plow-smi searches it automatically, so `LD_LIBRARY_PATH` is not needed.
 ### Network and WireGuard
 
 The exporter also reports interface counters (bytes, packets, errors, drops,
-link state), WireGuard peers (last handshake, transfer) and ICMP probes (loss,
+link state) on Linux and macOS, WireGuard peers (last handshake, transfer) and ICMP probes (loss,
 round-trip time):
 
 ```bash
+# Interface counters on Linux/macOS, including plower0, inferos* and utun*
+plows-exporter --network
 # Interfaces and WireGuard (wg needs CAP_NET_ADMIN, so run as root)
 sudo plows-exporter --network --wireguard
 # Also ping every WireGuard peer, and one extra address

@@ -46,7 +46,7 @@ pub struct Config {
     #[arg(long)]
     pub tpu: bool,
 
-    /// Enable network interface counters: bytes, packets, errors, drops, link state (Linux).
+    /// Enable network interface counters: bytes, packets, errors, drops, link state (Linux/macOS).
     #[arg(long)]
     pub network: bool,
 

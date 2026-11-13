@@ -1,6 +1,4 @@
-//! `network_*`: per-interface counters, read from sysfs at scrape time.
-
-use std::path::PathBuf;
+//! `network_*`: per-interface counters, read from the host at scrape time.
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use prometheus::core::{Collector, Desc};
@@ -18,7 +16,6 @@ type Field = fn(&InterfaceStats) -> Option<u64>;
 
 pub struct NetworkMetrics {
     hostname: String,
-    root: PathBuf,
     filter: InterfaceFilter,
     warned: AtomicBool,
     counters: Vec<(Family, Field)>,
@@ -30,11 +27,10 @@ pub struct NetworkMetrics {
 }
 
 impl NetworkMetrics {
-    pub fn new(hostname: String, root: PathBuf, filter: InterfaceFilter) -> Self {
+    pub fn new(hostname: String, filter: InterfaceFilter) -> Self {
         let c = |name: &str, help: &str| Family::counter(name, help, L);
         Self {
             hostname,
-            root,
             filter,
             warned: AtomicBool::new(false),
             counters: vec![
@@ -71,7 +67,7 @@ impl NetworkMetrics {
                     |i| i.tx_drops,
                 ),
             ],
-            up: Family::gauge("network_up", "1 if the interface is up with a carrier", L),
+            up: Family::gauge("network_up", "1 if the interface is operational", L),
             carrier: Family::gauge("network_carrier", "1 if the link has a carrier", L),
             mtu: Family::gauge("network_mtu_bytes", "Interface MTU in bytes", L),
             speed: Family::gauge("network_speed_bytes", "Link speed in bytes per second", L),
@@ -135,11 +131,11 @@ impl Collector for NetworkMetrics {
     }
 
     fn collect(&self) -> Vec<MetricFamily> {
-        match read_interfaces(&self.root, &self.filter) {
+        match read_interfaces(&self.filter) {
             Ok(ifaces) => self.render(&ifaces),
             Err(e) => {
                 if !self.warned.swap(true, Ordering::Relaxed) {
-                    warn!(path = %self.root.display(), error = %e, "network interface counters unavailable");
+                    warn!(error = %e, "network interface counters unavailable");
                 }
                 Vec::new()
             }
@@ -163,11 +159,7 @@ mod tests {
     }
 
     fn metrics() -> NetworkMetrics {
-        NetworkMetrics::new(
-            "h1".into(),
-            PathBuf::from("/nonexistent"),
-            InterfaceFilter::default(),
-        )
+        NetworkMetrics::new("h1".into(), InterfaceFilter::default())
     }
 
     #[test]
@@ -206,10 +198,5 @@ mod tests {
     fn an_interface_that_goes_away_leaves_the_output() {
         let text = render(Fixed(metrics(), Vec::new()));
         assert!(text.is_empty(), "{text}");
-    }
-
-    #[test]
-    fn an_unreadable_root_is_empty_not_an_error() {
-        assert!(render(metrics()).is_empty());
     }
 }

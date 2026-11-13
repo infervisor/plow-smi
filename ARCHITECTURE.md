@@ -102,7 +102,7 @@ with their Prometheus side in `metrics/*_metrics.rs`:
 
 | Collector | Source | When it reads |
 |---|---|---|
-| network | `/sys/class/net` | At scrape time |
+| network | `/sys/class/net` (Linux), `NET_RT_IFLIST2` sysctl (macOS) | At scrape time |
 | wireguard | `wg show all dump` (parsed; keys dropped) | Own thread, every `--interval` |
 | probe | ICMP echo on a ping or raw socket | Own thread, every `--probe-interval-ms` |
 

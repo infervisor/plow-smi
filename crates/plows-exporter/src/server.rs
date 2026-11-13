@@ -21,7 +21,7 @@ use crate::metrics::system_metrics::update_system_metrics;
 #[cfg(feature = "tpu")]
 use crate::collector::tpu::TpuCollector;
 
-use crate::collector::network::{InterfaceFilter, SYSFS_NET};
+use crate::collector::network::InterfaceFilter;
 use crate::collector::wireguard::{WgCommand, WgState};
 use crate::metrics::network_metrics::NetworkMetrics;
 use crate::metrics::registry::REGISTRY;
@@ -206,11 +206,7 @@ fn start_network_collectors(config: &Config, interval: Duration) -> anyhow::Resu
 
     if config.network_enabled() || default_all {
         let filter = InterfaceFilter::new(config.network_include.clone());
-        REGISTRY.register(Box::new(NetworkMetrics::new(
-            hostname.clone(),
-            SYSFS_NET.into(),
-            filter,
-        )))?;
+        REGISTRY.register(Box::new(NetworkMetrics::new(hostname.clone(), filter)))?;
         info!("Network interface collector registered");
     }
 

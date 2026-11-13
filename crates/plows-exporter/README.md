@@ -20,10 +20,18 @@ These three collectors build their output from the latest reading on each
 scrape. Counters hold the kernel's absolute value, so `rate()` survives
 restarts, and an interface, peer or target that goes away leaves the output.
 
-### `--network` (Linux)
+### `--network` (Linux and macOS)
 
-Read from `/sys/class/net` at scrape time. Skipped unless named by
-`--network-include`: `lo`, `veth*`, `docker*`, `br-*`, `virbr*`, `cni*`,
+Read from `/sys/class/net` on Linux and the native `NET_RT_IFLIST2` routing
+sysctl on macOS at scrape time. Both report absolute kernel counters; macOS
+uses 64-bit byte/packet totals and requires no root privileges.
+
+`plower0`, `inferos*`, and macOS `utun*` tunnel interfaces are included by
+default, along with physical interfaces. Collection is enabled with no
+collector flags, `--all`, or `--network`. When choosing specific collectors
+(for example `--apple --system`), add `--network` for these metrics.
+
+Skipped unless named by `--network-include`: `lo`, `lo0`, `veth*`, `docker*`, `br-*`, `virbr*`, `cni*`,
 `flannel*`, `cali*`, `vxlan.calico`, `tunl0`, `kube-ipvs*`.
 
 | Series | Type | Labels |
@@ -32,12 +40,17 @@ Read from `/sys/class/net` at scrape time. Skipped unless named by
 | `network_{receive,transmit}_packets_total` | counter | same |
 | `network_{receive,transmit}_errors_total` | counter | same |
 | `network_{receive,transmit}_drops_total` | counter | same |
-| `network_up` | gauge | same. 1 if up; a WireGuard link reports "unknown", so its carrier decides |
+| `network_up` | gauge | same. Linux: up, or unknown with carrier; macOS: both `IFF_UP` and `IFF_RUNNING` |
 | `network_carrier`, `network_mtu_bytes`, `network_speed_bytes` | gauge | same. Each only when the kernel exposes it |
 | `network_info` | gauge, always 1 | `hostname`, `interface`, `mac`, `kind` (`wireguard`, `wlan`, `ether`…) |
 
 sysfs shows the interfaces of the network namespace it was mounted in. A
 container with its own namespace needs its own sysfs mount.
+
+On macOS, drops are input/output queue drops. Physical carrier is not
+available from this snapshot, so `network_carrier` is omitted; link speed
+is omitted when the driver reports zero. Tunnels are labelled `kind="tunnel"`
+and retain their OS interface name (usually `utunN` on macOS).
 
 The older `system_network_*` gauges from `--system` are kept for now and will
 be removed in a later release. Use the counters above for new dashboards.

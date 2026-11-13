@@ -1,11 +1,13 @@
-//! Network interface counters from `/sys/class/net` (Linux).
+//! Network interface counters from sysfs (Linux) or routing sysctl (macOS).
 //!
-//! Read at scrape time: a sysfs read is cheap, and the counters then match
-//! the moment Prometheus records them. Other platforms have no `/sys`; the
-//! reader returns nothing there and `system_network_*` still carries byte totals.
+//! Read at scrape time so counters match the moment Prometheus records them.
 
-use std::fs;
-use std::path::Path;
+#[cfg(any(not(target_os = "macos"), test))]
+use std::{fs, path::Path};
+
+#[cfg(target_os = "macos")]
+#[path = "network_macos.rs"]
+mod macos;
 
 /// Where Linux publishes interface state.
 pub const SYSFS_NET: &str = "/sys/class/net";
@@ -14,6 +16,7 @@ pub const SYSFS_NET: &str = "/sys/class/net";
 /// per-container or per-bridge links that come and go with workloads.
 const DEFAULT_EXCLUDE: &[&str] = &[
     "lo",
+    "lo0",
     "veth*",
     "docker*",
     "br-*",
@@ -31,7 +34,7 @@ const DEFAULT_EXCLUDE: &[&str] = &[
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct InterfaceStats {
     pub name: String,
-    /// `DEVTYPE` from uevent (`wireguard`, `bridge`, `wlan`…), else the link type.
+    /// Linux `DEVTYPE` or the platform's link type; macOS tunnels use `tunnel`.
     pub kind: String,
     pub mac: String,
     pub rx_bytes: Option<u64>,
@@ -88,8 +91,21 @@ pub fn glob(pattern: &str, name: &str) -> bool {
     p[pi..].iter().all(|&c| c == '*')
 }
 
-/// Read every kept interface under `root` (normally [`SYSFS_NET`]), sorted by name.
-pub fn read_interfaces(
+/// Read the host's current interfaces, including plower0, inferos* and utun*.
+pub fn read_interfaces(filter: &InterfaceFilter) -> std::io::Result<Vec<InterfaceStats>> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::read_interfaces(filter)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        read_sysfs_interfaces(Path::new(SYSFS_NET), filter)
+    }
+}
+
+/// Read every kept interface under a sysfs root, sorted by name.
+#[cfg(any(not(target_os = "macos"), test))]
+pub fn read_sysfs_interfaces(
     root: &Path,
     filter: &InterfaceFilter,
 ) -> std::io::Result<Vec<InterfaceStats>> {
@@ -105,6 +121,7 @@ pub fn read_interfaces(
         .collect())
 }
 
+#[cfg(any(not(target_os = "macos"), test))]
 fn read_interface(dir: &Path, name: String) -> InterfaceStats {
     let text = |file: &str| {
         fs::read_to_string(dir.join(file))
@@ -154,6 +171,7 @@ fn read_interface(dir: &Path, name: String) -> InterfaceStats {
 }
 
 /// Name the common `ARPHRD_*` link types (`include/uapi/linux/if_arp.h`).
+#[cfg(any(not(target_os = "macos"), test))]
 fn link_type(arphrd: Option<u64>) -> String {
     match arphrd {
         Some(1) => "ether".into(),
@@ -219,7 +237,7 @@ mod tests {
     #[test]
     fn reads_counters_state_and_kind() {
         let root = fake_sysfs();
-        let all = read_interfaces(root.path(), &InterfaceFilter::default()).unwrap();
+        let all = read_sysfs_interfaces(root.path(), &InterfaceFilter::default()).unwrap();
         let names: Vec<_> = all.iter().map(|i| i.name.as_str()).collect();
         assert_eq!(names, ["eno1", "eth0", "inferos0"]);
 
@@ -244,11 +262,25 @@ mod tests {
     }
 
     #[test]
+    fn unreadable_sysfs_root_returns_an_error() {
+        let root = tempdir::TempDir::new();
+        assert!(
+            read_sysfs_interfaces(&root.path().join("missing"), &InterfaceFilter::default())
+                .is_err()
+        );
+    }
+
+    #[test]
     fn include_overrides_the_default_exclusions() {
         let f = InterfaceFilter::new(vec!["veth*".into()]);
         assert!(f.keep("veth12ab") && f.keep("eth0") && !f.keep("lo"));
         let d = InterfaceFilter::default();
         assert!(!d.keep("docker0") && !d.keep("br-1a2b") && d.keep("inferos0") && d.keep("wg0"));
+        for name in ["plower0", "inferos0", "inferos123", "utun0", "utun42"] {
+            assert!(d.keep(name), "{name} must be monitored by default");
+        }
+        assert!(!d.keep("lo0"));
+        assert!(InterfaceFilter::new(vec!["lo*".into()]).keep("lo0"));
     }
 
     #[test]

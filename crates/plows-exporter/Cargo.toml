@@ -61,6 +61,9 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls"], o
 # Optional: ICMP echo sockets for probes
 socket2 = { version = "0.6", optional = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
 [[bin]]
 name = "plows-exporter"
 path = "src/main.rs"
