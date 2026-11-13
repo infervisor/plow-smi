@@ -8,7 +8,7 @@ license.workspace = true
 description = "Professional GPU metrics exporter for Prometheus (AMD, NVIDIA, Intel, TPU, System)"
 
 [features]
-default = ["gpu", "system"]
+default = ["gpu", "system", "probe"]
 # Unified runtime GPU backends via plows-gpu (NVML / amdgpu sysfs / Level Zero).
 gpu = []
 # Legacy aliases kept so existing `--features nvidia/amd` command lines keep working.
@@ -16,6 +16,8 @@ nvidia = ["gpu"]
 amd = ["gpu"]
 system = ["dep:sysinfo"]
 tpu = ["dep:reqwest"]
+# ICMP loss/RTT probes (`--probe`, `--probe-wireguard-peers`).
+probe = ["dep:socket2"]
 
 [dependencies]
 # Async runtime
@@ -55,6 +57,12 @@ sysinfo = { workspace = true, optional = true }
 
 # Optional: TPU support (HTTP client for GCE metadata + TPU runtime)
 reqwest = { version = "0.13", default-features = false, features = ["rustls"], optional = true }
+
+# Optional: ICMP echo sockets for probes
+socket2 = { version = "0.6", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
 
 [[bin]]
 name = "plows-exporter"

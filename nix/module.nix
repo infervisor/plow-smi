@@ -59,6 +59,40 @@ in
       description = "Enable Google Cloud TPU metrics collection.";
     };
 
+    network = mkOption {
+      type = types.bool;
+      default = true;
+      description = "Enable network interface counters (bytes, packets, errors, drops, link state).";
+    };
+
+    wireguard = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Enable WireGuard interface and peer metrics. Adds wireguard-tools to the
+        unit's PATH and grants CAP_NET_ADMIN, which `wg show` needs.
+      '';
+    };
+
+    probe = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      example = [ "10.100.0.1" ];
+      description = "IPv4 addresses to ping every probe interval for loss and round-trip time.";
+    };
+
+    probeWireguardPeers = mkOption {
+      type = types.bool;
+      default = false;
+      description = "Ping every WireGuard peer at the first /32 in its allowed IPs. Implies `wireguard`.";
+    };
+
+    probeIntervalMs = mkOption {
+      type = types.ints.between 200 60000;
+      default = 1000;
+      description = "Milliseconds between probe rounds.";
+    };
+
     all = mkOption {
       type = types.bool;
       default = false;
@@ -102,7 +136,10 @@ in
     };
   };
 
-  config = mkIf cfg.enable {
+  config = mkIf cfg.enable (let
+    wireguard = cfg.all || cfg.wireguard || cfg.probeWireguardPeers;
+    probing = cfg.probe != [ ] || cfg.probeWireguardPeers;
+  in {
     users.users = mkIf (cfg.user == "plow-smi-exporter") {
       plow-smi-exporter = {
         isSystemUser = true;
@@ -122,6 +159,7 @@ in
       wantedBy = [ "multi-user.target" ];
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
+      path = optional wireguard pkgs.wireguard-tools;
 
       serviceConfig = {
         ExecStart = concatStringsSep " " ([
@@ -137,6 +175,11 @@ in
         ++ optional (!cfg.all && cfg.intel) "--intel"
         ++ optional (!cfg.all && cfg.system) "--system"
         ++ optional (!cfg.all && cfg.tpu) "--tpu"
+        ++ optional (!cfg.all && cfg.network) "--network"
+        ++ optional (!cfg.all && cfg.wireguard) "--wireguard"
+        ++ concatMap (ip: [ "--probe" ip ]) cfg.probe
+        ++ optional cfg.probeWireguardPeers "--probe-wireguard-peers"
+        ++ optionals probing [ "--probe-interval-ms" (toString cfg.probeIntervalMs) ]
         ++ cfg.extraFlags);
 
         User = cfg.user;
@@ -154,7 +197,11 @@ in
         ProtectHome = true;
         PrivateTmp = true;
         SupplementaryGroups = [ "video" "render" ];
+        # `wg show` needs CAP_NET_ADMIN; ICMP probes use a ping socket where
+        # net.ipv4.ping_group_range allows it, else a raw socket (CAP_NET_RAW).
+        AmbientCapabilities =
+          optional wireguard "CAP_NET_ADMIN" ++ optional probing "CAP_NET_RAW";
       };
     };
-  };
+  });
 }
