@@ -24,7 +24,7 @@ jobs:
   version:
     name: Release version
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     outputs:
       next: ${{ steps.version.outputs.next }}
     steps:
@@ -32,12 +32,17 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Test the version rule
-        run: bash scripts/ci/release-version.sh --self-test
+      - uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Test release automation
+        run: nix build .#checks.x86_64-linux.release-ci --print-build-logs
       - name: Decide the version
         id: version
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: echo "next=$(bash scripts/ci/release-version.sh)" >> "$GITHUB_OUTPUT"
+        run: |
+          next="$(nix run .#release-version)"
+          echo "next=$next" >> "$GITHUB_OUTPUT"
 
   build:
     name: ${{ matrix.system }}
@@ -128,23 +133,9 @@ jobs:
       - name: Bump, commit and tag
         id: tag
         run: |
-          git fetch --tags --force --quiet origin
-          if git rev-parse -q --verify "refs/tags/v$NEXT" >/dev/null; then
-            # Only a re-run of this job finds its tag there already.
-            tagged="$(git rev-parse "v$NEXT^{commit}")"
-            test "$tagged" = "$GITHUB_SHA" || test "$(git rev-parse "$tagged^")" = "$GITHUB_SHA"
-          else
-            nix run .#bump -- "$NEXT"
-            git add Cargo.toml Cargo.lock
-            if ! git diff --cached --quiet; then
-              git -c user.name="github-actions[bot]" \
-                -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-                commit --quiet -m "plow-smi: v$NEXT [skip ci]"
-            fi
-            git tag "v$NEXT"
-            git push origin "refs/tags/v$NEXT"
-          fi
-          echo "commit=$(git rev-parse --short=12 "v$NEXT^{commit}")" >> "$GITHUB_OUTPUT"
+          git fetch --tags --quiet origin
+          commit="$(nix run .#release-tag -- "$NEXT")"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v4
         with:
           pattern: plow-smi-*
@@ -154,15 +145,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-        working-directory: artifacts
-        run: |
-          sha256sum --check ./*.sha256
-          cat ./*.sha256 | sort -k2 > SHA256SUMS
-          if ! gh release view "v$NEXT" >/dev/null 2>&1; then
-            gh release create "v$NEXT" --verify-tag --draft --generate-notes \
-              --title "Plow SMI v$NEXT" ./*.tar.gz SHA256SUMS
-          fi
-          gh release edit "v$NEXT" --draft=false
+        run: nix run .#publish-github -- artifacts "$NEXT"
       # The same archives, under v1/plow-smi/<version>/<triple>/ on pdist.
       # Version directories are create-only, so a re-run adopts what is there.
       - name: Publish to the registry
@@ -172,6 +155,4 @@ jobs:
           CLOUDFLARE_R2_BUCKET: ${{ secrets.CLOUDFLARE_R2_BUCKET }}
           CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
           CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
-        run: |
-          nix shell --inputs-from . nixpkgs#awscli2 nixpkgs#jq \
-            --command bash scripts/ci/publish-pdist.sh artifacts "$NEXT" "$COMMIT"
+        run: nix run .#publish-pdist -- artifacts "$NEXT" "$COMMIT"

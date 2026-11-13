@@ -127,16 +127,21 @@ archive. Release tooling unit tests run both in Actions and `nix flake check`.
 
 A merge to `main` is a release; nobody edits a version or pushes a tag by hand:
 
-1. `scripts/ci/release-version.sh` picks the version: one patch past the newest
-   `vX.Y.Z` tag, or the workspace version when it is ahead of that tag.
+1. `nix run .#release-version` picks the version: one patch past the newest
+   `vX.Y.Z` tag, or the workspace version when it is ahead of that tag. A rerun
+   resumes a tag already reserved for the same source commit.
 2. Every platform runs `nix run .#bump -- <version>` and builds and tests at
    that version. Only after all four pass does the workflow publish.
-3. The bump is committed and tagged `v<version>`. That commit is kept by the
-   tag only, so `main`'s `Cargo.toml` lags the tags.
+3. `nix run .#release-tag -- <version>` commits the bump and tags `v<version>`.
+   That commit is kept by the tag only, so `main`'s `Cargo.toml` lags the tags.
 4. Archives and `SHA256SUMS` go to GitHub Releases, and the platform archives
    go to pdist under `v1/plow-smi/<version>/<triple>/` with `index.json` and
-   `latest`, written by `scripts/ci/publish-pdist.sh` (the AWS CLI against
-   R2). A published version is never overwritten.
+   `latest`, written by `nix run .#publish-pdist -- artifacts <version> <commit>`.
+   GitHub publishing uses `nix run .#publish-github -- artifacts <version>`.
+   All tools and their dependencies are pinned by the flake; regression tests
+   run in `checks.<system>.release-ci`. Publishing requires all four platforms,
+   verifies existing objects on retries, and never overwrites a version.
+   Conditional writes prevent concurrent publishers from regressing `latest`.
 
 For a minor or major release, run `nix run .#bump -- X.Y.0` and merge it. The
 registry credentials are the `pdist` environment's secrets
@@ -144,6 +149,10 @@ registry credentials are the `pdist` environment's secrets
 `CLOUDFLARE_R2_SECRET_ACCESS_KEY`); repository Actions must be allowed to
 create releases and push tags. Linux runtime source archives are on GitHub
 Releases only.
+
+`PDIST_S3_ENDPOINT` optionally overrides the R2 endpoint for local S3 testing.
+Release tools run from the repository root and use no ambient Python packages,
+AWS CLI, jq, or GNU text utilities.
 
 ## Requirements
 
