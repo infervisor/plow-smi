@@ -75,7 +75,8 @@ A NixOS module for running the exporter as a systemd service is available at
 
 ## Binary releases
 
-[GitHub Releases](https://github.com/infervisor/plow-smi/releases) provide archives
+[GitHub Releases](https://github.com/infervisor/plow-smi/releases) and the
+registry at `https://pdist.infervisor.ai/v1/plow-smi/` provide archives
 for Linux and macOS, each on **x86_64** and **aarch64 (ARM64)**. Every archive
 contains all four CLI binaries. Linux AMD, NVIDIA and Intel support share the
 same build; no vendor SDK or GPU is needed to build it. macOS ARM64 additionally
@@ -116,7 +117,7 @@ nix build .#release       # result/*.tar.gz and per-archive SHA-256 checksums
 ```
 
 `.github/workflows/release.yml` builds and tests all four native platforms on
-pull requests, pushes to `main`/`master`, and manual runs. Linux archives are also
+pull requests, pushes to `main`, and manual runs. Linux archives are also
 tested in Ubuntu, Debian and Alpine containers without `/nix/store`, including
 mock NVIDIA/AMD driver loading. Archives use normalized timestamps and ownership.
 Linux runtime source archives include glibc/GCC source, patches, licenses and
@@ -124,13 +125,34 @@ the pinned Nix and application build recipes; these are distributed beside the
 binary archives. Runtime license texts are also included in the Linux binaries'
 archive. Release tooling unit tests run both in Actions and `nix flake check`.
 
-To publish, set `[workspace.package].version` in `Cargo.toml`, refresh
-`Cargo.lock` with Cargo, commit, then push a matching tag (e.g. `v0.1.0`). Tag
-and workspace version must match. Only after every platform passes does the
-workflow publish archives and `SHA256SUMS` to GitHub Releases. Tags containing
-a prerelease suffix are published as prereleases. The workflow uses only
-`GITHUB_TOKEN`; repository Actions must be allowed to create releases. It does
-not overwrite an existing release.
+A merge to `main` is a release; nobody edits a version or pushes a tag by hand:
+
+1. `nix run .#release-version` picks the version: one patch past the newest
+   `vX.Y.Z` tag, or the workspace version when it is ahead of that tag. A rerun
+   resumes a tag already reserved for the same source commit.
+2. Every platform runs `nix run .#bump -- <version>` and builds and tests at
+   that version. Only after all four pass does the workflow publish.
+3. `nix run .#release-tag -- <version>` commits the bump and tags `v<version>`.
+   That commit is kept by the tag only, so `main`'s `Cargo.toml` lags the tags.
+4. Archives and `SHA256SUMS` go to GitHub Releases, and the platform archives
+   go to pdist under `v1/plow-smi/<version>/<triple>/` with `index.json` and
+   `latest`, written by `nix run .#publish-pdist -- artifacts <version> <commit>`.
+   GitHub publishing uses `nix run .#publish-github -- artifacts <version>`.
+   All tools and their dependencies are pinned by the flake; regression tests
+   run in `checks.<system>.release-ci`. Publishing requires all four platforms,
+   verifies existing objects on retries, and never overwrites a version.
+   Conditional writes prevent concurrent publishers from regressing `latest`.
+
+For a minor or major release, run `nix run .#bump -- X.Y.0` and merge it. The
+registry credentials are the `pdist` environment's secrets
+(`CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_R2_BUCKET`, `CLOUDFLARE_R2_ACCESS_KEY_ID`,
+`CLOUDFLARE_R2_SECRET_ACCESS_KEY`); repository Actions must be allowed to
+create releases and push tags. Linux runtime source archives are on GitHub
+Releases only.
+
+`PDIST_S3_ENDPOINT` optionally overrides the R2 endpoint for local S3 testing.
+Release tools run from the repository root and use no ambient Python packages,
+AWS CLI, jq, or GNU text utilities.
 
 ## Requirements
 

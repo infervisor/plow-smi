@@ -91,6 +91,8 @@
           src = source;
         };
 
+        releaseTools = import ./nix/release-tools.nix { inherit pkgs; };
+
         mkApp = name: pkg: {
           type = "app";
           program = "${pkg}/bin/${name}";
@@ -98,7 +100,7 @@
         };
       in
       {
-        packages = binPackages // {
+        packages = binPackages // releaseTools.packages // {
           default = binPackages."plow-smi";
           # Full workspace build: every binary in one derivation
           # (`nix build .#all`), useful for images/CI artifact bundling.
@@ -107,11 +109,13 @@
           inherit release;
         };
 
-        apps = (pkgs.lib.mapAttrs mkApp binPackages) // {
+        apps = (pkgs.lib.mapAttrs mkApp binPackages)
+          // (pkgs.lib.mapAttrs (name: pkg: mkApp "plow-smi-${name}" pkg) releaseTools.packages) // {
           default = mkApp "plow-smi" binPackages."plow-smi";
         };
 
         checks = binPackages // {
+          release-ci = releaseTools.check;
           workspace-build-and-test = workspace;
           release-tooling = pkgs.runCommand "plow-smi-release-tooling-tests"
             { nativeBuildInputs = [ pkgs.python3 ]; }
