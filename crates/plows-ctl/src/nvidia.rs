@@ -36,8 +36,14 @@ pub fn list_gpus(format: &OutputFormat) -> Result<()> {
             temperature_c: m.temperature.map(|t| t as i64),
             power_w: m.power_usage.map(|w| w as u64),
             power_limit_w: m.power_limit.map(|w| w as u64),
-            memory_used: m.memory_used.map(format_bytes).unwrap_or_default(),
-            memory_total: m.memory_total.map(format_bytes).unwrap_or_default(),
+            memory_used: m
+                .memory_used
+                .map(format_bytes)
+                .unwrap_or_else(|| "N/A".into()),
+            memory_total: m
+                .memory_total
+                .map(format_bytes)
+                .unwrap_or_else(|| "N/A".into()),
         });
     }
 
@@ -58,6 +64,11 @@ pub fn list_gpus(format: &OutputFormat) -> Result<()> {
             );
             println!("{}", "─".repeat(80));
             for e in &entries {
+                let mem_str = if e.memory_used == "N/A" && e.memory_total == "N/A" {
+                    "N/A".to_string()
+                } else {
+                    format!("{}/{}", e.memory_used, e.memory_total)
+                };
                 println!(
                     "{:>3} {:30} {:>4}°C {:>5}/{:<5}W {:>16}",
                     e.index.to_string().cyan(),
@@ -65,7 +76,7 @@ pub fn list_gpus(format: &OutputFormat) -> Result<()> {
                     crate::value_or_na(e.temperature_c),
                     crate::value_or_na(e.power_w),
                     crate::value_or_na(e.power_limit_w),
-                    format!("{}/{}", e.memory_used, e.memory_total),
+                    mem_str,
                 );
             }
         }
@@ -116,12 +127,17 @@ pub fn gpu_info(index: u32, format: &OutputFormat) -> Result<()> {
             println!("{}", format!("GPU {index}: {}", device.model).cyan().bold());
             println!("{}", "─".repeat(50));
             println!("  UUID:          {}", device.uuid);
-            println!("  Temperature:   {}°C", m.temperature.unwrap_or(0.0));
             println!(
-                "  Power:         {:.0} / {:.0} W",
-                m.power_usage.unwrap_or(0.0),
-                m.power_limit.unwrap_or(0.0)
+                "  Temperature:   {}",
+                m.temperature.map(|t| format!("{t}°C")).unwrap_or_else(|| "N/A".into())
             );
+            let power_str = match (m.power_usage, m.power_limit) {
+                (Some(u), Some(l)) => format!("{u:.0} / {l:.0} W"),
+                (Some(u), None) => format!("{u:.0} W / N/A"),
+                (None, Some(l)) => format!("N/A / {l:.0} W"),
+                (None, None) => "N/A".to_string(),
+            };
+            println!("  Power:         {power_str}");
             if let (Some(min), Some(max)) = (min_power, max_power) {
                 println!("  Power Range:   {} - {} W", min / 1000, max / 1000);
             }
@@ -131,15 +147,20 @@ pub fn gpu_info(index: u32, format: &OutputFormat) -> Result<()> {
                     format_bytes(used),
                     format_bytes(total)
                 );
+            } else {
+                println!("  Memory:        N/A (Unified Architecture)");
             }
             println!(
                 "  Core Clock:    {} MHz (max: {max_core} MHz)",
                 m.clock_graphics.unwrap_or(0)
             );
-            println!(
-                "  Memory Clock:  {} MHz (max: {max_mem} MHz)",
-                m.clock_memory.unwrap_or(0)
-            );
+            if let Some(mem_clk) = m.clock_memory {
+                println!("  Memory Clock:  {mem_clk} MHz (max: {max_mem} MHz)");
+            } else if max_mem > 0 {
+                println!("  Memory Clock:  N/A (max: {max_mem} MHz)");
+            } else {
+                println!("  Memory Clock:  N/A (Unified Architecture)");
+            }
             if let Some(f) = m.fan_speed {
                 println!("  Fan:           {f}%");
             }

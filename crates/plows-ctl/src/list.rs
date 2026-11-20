@@ -80,6 +80,11 @@ pub fn list_all(format: &OutputFormat) -> Result<()> {
             );
             println!("{}", "─".repeat(90));
             for (vendor, e) in &entries {
+                let mem_str = if e.memory_used == "N/A" && e.memory_total == "N/A" {
+                    "N/A".to_string()
+                } else {
+                    format!("{}/{}", e.memory_used, e.memory_total)
+                };
                 println!(
                     "{:>3} {:8} {:28} {:>4}°C {:>5}/{:<5}W {:>16}",
                     e.index.to_string().cyan(),
@@ -88,7 +93,7 @@ pub fn list_all(format: &OutputFormat) -> Result<()> {
                     crate::value_or_na(e.temperature_c),
                     crate::value_or_na(e.power_w),
                     crate::value_or_na(e.power_limit_w),
-                    format!("{}/{}", e.memory_used, e.memory_total),
+                    mem_str,
                 );
             }
         }

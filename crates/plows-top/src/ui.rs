@@ -687,7 +687,10 @@ fn draw_gpu_row(
 
     let temp = gpu.temperature_celsius.unwrap_or(0);
     let power_w = gpu.power_usage_mw.unwrap_or(0) / 1000;
-    let power_limit_w = gpu.power_limit_mw.unwrap_or(1) / 1000;
+    let power_text = match gpu.power_limit_mw {
+        Some(limit) => format!("{power_w}/{}W", limit / 1000),
+        None => format!("{power_w}W/N/A"),
+    };
     let fan = gpu.fan_speed;
     let selected_marker = if idx == app.selected_gpu { "▶" } else { " " };
     let vendor_tag = format!("[{}]", gpu.vendor.to_uppercase());
@@ -707,10 +710,7 @@ fn draw_gpu_row(
         Span::styled(" │ ", Style::default().fg(DARK_GRAY)),
         Span::styled(format!("{temp}°C"), Style::default().fg(temp_color(temp))),
         Span::styled(" │ ", Style::default().fg(DARK_GRAY)),
-        Span::styled(
-            format!("{power_w}/{power_limit_w}W"),
-            Style::default().fg(YELLOW),
-        ),
+        Span::styled(power_text, Style::default().fg(YELLOW)),
         Span::styled(" │ ", Style::default().fg(DARK_GRAY)),
         match fan {
             Some(f) if gpu.vendor == "amd" => {
@@ -722,9 +722,11 @@ fn draw_gpu_row(
         Span::styled(" │ ", Style::default().fg(DARK_GRAY)),
         Span::styled(
             format!(
-                "{}MHz/{}MHz",
+                "{}MHz/{}",
                 gpu.clock_core_mhz.unwrap_or(0),
-                gpu.clock_memory_mhz.unwrap_or(0)
+                gpu.clock_memory_mhz
+                    .map(|m| format!("{m}MHz"))
+                    .unwrap_or_else(|| "N/A".into())
             ),
             Style::default().fg(DARK_GRAY),
         ),
@@ -749,10 +751,13 @@ fn draw_gpu_row(
     frame.render_widget(Paragraph::new(util_line), rows[1]);
 
     // Row 3: Memory bar
-    let mem_used = gpu.memory_used_bytes.unwrap_or(0);
-    let mem_total = gpu.memory_total_bytes.unwrap_or(1);
-    let mem_pct = (mem_used as f64 / mem_total as f64) * 100.0;
-    let mem_text = format!("{}/{}", fmt_bytes(mem_used), fmt_bytes(mem_total));
+    let (mem_pct, mem_text) = match (gpu.memory_used_bytes, gpu.memory_total_bytes) {
+        (Some(used), Some(total)) if total > 0 => (
+            (used as f64 / total as f64) * 100.0,
+            format!("{}/{}", fmt_bytes(used), fmt_bytes(total)),
+        ),
+        _ => (0.0, "N/A".to_string()),
+    };
     let mem_bar_width = (rows[2].width as usize).saturating_sub(6 + mem_text.len());
     let (filled, empty) = htop_bar(mem_bar_width, mem_pct);
     let mem_line = Line::from(vec![
@@ -978,9 +983,21 @@ fn draw_gpu_detail(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(gpu_gauge, chunks[2]);
 
     // Memory gauge
-    let mem_used = gpu.memory_used_bytes.unwrap_or(0);
-    let mem_total = gpu.memory_total_bytes.unwrap_or(1);
-    let mem_pct = ((mem_used as f64 / mem_total as f64) * 100.0) as u16;
+    let (mem_pct, mem_label) = match (gpu.memory_used_bytes, gpu.memory_total_bytes) {
+        (Some(used), Some(total)) if total > 0 => {
+            let pct = ((used as f64 / total as f64) * 100.0) as u16;
+            (
+                pct,
+                format!(
+                    "{} / {} ({:.0}%)",
+                    fmt_bytes_long(used),
+                    fmt_bytes_long(total),
+                    pct
+                ),
+            )
+        }
+        _ => (0, "N/A".to_string()),
+    };
     let mem_gauge = Gauge::default()
         .block(
             Block::default()
@@ -994,12 +1011,7 @@ fn draw_gpu_detail(frame: &mut Frame, app: &App, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         )
         .percent(mem_pct.min(100))
-        .label(format!(
-            "{} / {} ({:.0}%)",
-            fmt_bytes_long(mem_used),
-            fmt_bytes_long(mem_total),
-            mem_pct
-        ));
+        .label(mem_label);
     frame.render_widget(mem_gauge, chunks[3]);
 
     // Detail sparklines (4 charts)
@@ -1038,9 +1050,11 @@ fn draw_gpu_selector(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_gpu_metrics(frame: &mut Frame, gpu: &plows_exporter::collector::GpuSnapshot, area: Rect) {
     let temp = gpu.temperature_celsius.unwrap_or(0);
     let power_w = gpu.power_usage_mw.unwrap_or(0) as f64 / 1000.0;
-    let power_limit_w = gpu.power_limit_mw.unwrap_or(0) as f64 / 1000.0;
+    let power_text = match gpu.power_limit_mw {
+        Some(limit) => format!("{power_w:.0}/{:.0} W", limit as f64 / 1000.0),
+        None => format!("{power_w:.0} W / N/A"),
+    };
     let core_mhz = gpu.clock_core_mhz.unwrap_or(0);
-    let mem_mhz = gpu.clock_memory_mhz.unwrap_or(0);
     let fan = gpu.fan_speed;
 
     let lines = vec![
@@ -1058,7 +1072,7 @@ fn draw_gpu_metrics(frame: &mut Frame, gpu: &plows_exporter::collector::GpuSnaps
             ),
             Span::styled("    Power: ", Style::default().fg(DARK_GRAY)),
             Span::styled(
-                format!("{power_w:.0}/{power_limit_w:.0} W"),
+                power_text,
                 Style::default().fg(YELLOW).bold(),
             ),
             Span::styled("    Fan: ", Style::default().fg(DARK_GRAY)),
@@ -1071,7 +1085,10 @@ fn draw_gpu_metrics(frame: &mut Frame, gpu: &plows_exporter::collector::GpuSnaps
             Span::styled(" Clocks: ", Style::default().fg(DARK_GRAY)),
             Span::styled(format!("{core_mhz} MHz"), Style::default().fg(CYAN)),
             Span::styled(" core  ", Style::default().fg(DARK_GRAY)),
-            Span::styled(format!("{mem_mhz} MHz"), Style::default().fg(CYAN)),
+            match gpu.clock_memory_mhz {
+                Some(mem) => Span::styled(format!("{mem} MHz"), Style::default().fg(CYAN)),
+                None => Span::styled("N/A", Style::default().fg(DARK_GRAY)),
+            },
             Span::styled(" mem", Style::default().fg(DARK_GRAY)),
         ]),
     ];
@@ -1443,6 +1460,30 @@ mod apple_tests {
             .collect();
         assert!(text.contains("ANE") && text.contains("N/A"));
         assert!(text.contains("shared, not VRAM"));
+    }
+
+    #[test]
+    fn gpu_metrics_renders_na_for_unified_memory_and_missing_limits() {
+        let gpu = plows_exporter::collector::GpuSnapshot::new(
+            0,
+            "nvidia",
+            "PCI:00".into(),
+            "NVIDIA GB10".into(),
+            "uuid-gb10".into(),
+        );
+        let mut terminal = Terminal::new(TestBackend::new(100, 10)).unwrap();
+        terminal
+            .draw(|frame| draw_gpu_metrics(frame, &gpu, frame.area()))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("Power:") && text.contains("N/A"));
+        assert!(text.contains("Clocks:") && text.contains("N/A"));
     }
 }
 

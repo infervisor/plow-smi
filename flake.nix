@@ -66,6 +66,21 @@
           cargoBuildFlags = [ "--workspace" "--bins" ];
           cargoTestFlags = [ "--workspace" ];
 
+          unpackCmd = ''
+            dest="$(stripHash "$curSrc")"
+            mkdir -p "$dest"
+            tar -C "$curSrc" -cf - . | tar -C "$dest" -xf -
+          '';
+
+          dontCargoSetupPostUnpack = true;
+
+          postUnpack = ''
+            ln -s "$cargoDeps" cargo-vendor-dir
+            export cargoDepsCopy="$(realpath cargo-vendor-dir)"
+            mkdir -p .cargo
+            cat "$cargoDeps/.cargo/config.toml" > .cargo/config.toml
+          '';
+
           meta = commonMeta // {
             description = "Plow SMI — GPU & system monitoring suite (all binaries)";
           };
