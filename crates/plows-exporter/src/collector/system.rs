@@ -74,7 +74,41 @@ struct SystemState {
     networks: Networks,
     components: Components,
     cores: Option<usize>,
+    process_count: usize,
     inventory_refreshed: Option<Instant>,
+    sensors_rescanned: Option<Instant>,
+}
+
+/// How often disks, sensor readings and the process count are re-read.
+const INVENTORY_INTERVAL: Duration = Duration::from_secs(5);
+/// How often the set of hardware sensors is re-discovered. Readings are still
+/// taken every [`INVENTORY_INTERVAL`]; only hot-plugged sensors wait this long.
+const SENSOR_RESCAN_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Number of processes on the host.
+///
+/// On Linux this counts the numeric entries of `/proc` (one `getdents` pass)
+/// instead of letting `sysinfo` open and parse `stat` and `status` for every
+/// process, which costs thousands of syscalls per refresh on a busy host.
+fn count_processes(sys: &mut System) -> usize {
+    #[cfg(target_os = "linux")]
+    if let Ok(entries) = std::fs::read_dir("/proc") {
+        return entries
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .as_encoded_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_digit)
+            })
+            .count();
+    }
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing().without_tasks(),
+    );
+    sys.processes().len()
 }
 
 impl SystemCollector {
@@ -89,7 +123,9 @@ impl SystemCollector {
                 networks: Networks::new()?,
                 components: Components::new()?,
                 cores: System::physical_core_count().ok(),
+                process_count: 0,
                 inventory_refreshed: None,
+                sensors_rescanned: None,
             }),
             hostname: whoami::fallible::hostname().unwrap_or_else(|_| "unknown".to_string()),
             device_name: whoami::fallible::devicename()
@@ -107,20 +143,23 @@ impl SystemCollector {
             networks: net_list,
             components,
             cores,
+            process_count,
             inventory_refreshed,
+            sensors_rescanned,
         } = &mut *state;
         sys.refresh_cpu_usage();
         sys.refresh_memory();
         // Slow inventory/sensors need not be rescanned on every fast CPU/network tick.
         // The default exporter interval is five seconds; faster UIs reuse this inventory.
-        if inventory_refreshed.is_none_or(|t| t.elapsed() >= Duration::from_secs(5)) {
-            sys.refresh_processes_specifics(
-                ProcessesToUpdate::All,
-                true,
-                ProcessRefreshKind::nothing().without_tasks(),
-            );
+        if inventory_refreshed.is_none_or(|t| t.elapsed() >= INVENTORY_INTERVAL) {
+            *process_count = count_processes(sys);
             disk_list.refresh(true);
-            components.refresh(true);
+            if sensors_rescanned.is_none_or(|t| t.elapsed() >= SENSOR_RESCAN_INTERVAL) {
+                components.refresh(true);
+                *sensors_rescanned = Some(Instant::now());
+            } else {
+                components.iter_mut().for_each(|c| c.refresh());
+            }
             *inventory_refreshed = Some(Instant::now());
         }
 
@@ -137,7 +176,7 @@ impl SystemCollector {
             five: 0.0,
             fifteen: 0.0,
         });
-        let process_count = sys.processes().len();
+        let process_count = *process_count;
 
         // Disks
         let disks: Vec<DiskInfo> = disk_list
@@ -217,5 +256,30 @@ impl Collector for SystemCollector {
         // System collector doesn't produce GpuSnapshots — it uses its own path.
         // We return an empty vec here; the system metrics are exported separately.
         Ok(Vec::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_count_is_cached_between_inventory_refreshes() {
+        let collector = SystemCollector::new().unwrap();
+        let first = collector.collect_system_snapshot();
+        // This test process itself is always counted.
+        assert!(first.process_count >= 1);
+        let state = collector.state.lock().unwrap();
+        assert_eq!(state.process_count, first.process_count);
+        assert!(state.inventory_refreshed.is_some() && state.sensors_rescanned.is_some());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_process_count_reads_proc_without_a_sysinfo_scan() {
+        let mut sys = System::new().unwrap();
+        assert!(count_processes(&mut sys) >= 1);
+        // The cheap path never populates sysinfo's process table.
+        assert!(sys.processes().is_empty());
     }
 }

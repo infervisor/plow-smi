@@ -686,10 +686,12 @@ fn draw_gpu_row(
         .split(area);
 
     let temp = gpu.temperature_celsius.unwrap_or(0);
-    let power_w = gpu.power_usage_mw.unwrap_or(0) / 1000;
-    let power_text = match gpu.power_limit_mw {
-        Some(limit) => format!("{power_w}/{}W", limit / 1000),
-        None => format!("{power_w}W/N/A"),
+    // SoC and integrated GPUs report a draw but no limit: show the draw alone.
+    let power_text = match (gpu.power_usage_mw, gpu.power_limit_mw) {
+        (Some(usage), Some(limit)) => format!("{}/{}W", usage / 1000, limit / 1000),
+        (Some(usage), None) => format!("{}W", usage / 1000),
+        (None, Some(limit)) => format!("N/A/{}W", limit / 1000),
+        (None, None) => "Pwr:N/A".to_string(),
     };
     let fan = gpu.fan_speed;
     let selected_marker = if idx == app.selected_gpu { "▶" } else { " " };
@@ -1049,10 +1051,12 @@ fn draw_gpu_selector(frame: &mut Frame, app: &App, area: Rect) {
 
 fn draw_gpu_metrics(frame: &mut Frame, gpu: &plows_exporter::collector::GpuSnapshot, area: Rect) {
     let temp = gpu.temperature_celsius.unwrap_or(0);
-    let power_w = gpu.power_usage_mw.unwrap_or(0) as f64 / 1000.0;
-    let power_text = match gpu.power_limit_mw {
-        Some(limit) => format!("{power_w:.0}/{:.0} W", limit as f64 / 1000.0),
-        None => format!("{power_w:.0} W / N/A"),
+    let watts = |mw: u64| mw as f64 / 1000.0;
+    let power_text = match (gpu.power_usage_mw, gpu.power_limit_mw) {
+        (Some(usage), Some(limit)) => format!("{:.0}/{:.0} W", watts(usage), watts(limit)),
+        (Some(usage), None) => format!("{:.0} W", watts(usage)),
+        (None, Some(limit)) => format!("N/A/{:.0} W", watts(limit)),
+        (None, None) => "N/A".to_string(),
     };
     let core_mhz = gpu.clock_core_mhz.unwrap_or(0);
     let fan = gpu.fan_speed;
@@ -1071,10 +1075,7 @@ fn draw_gpu_metrics(frame: &mut Frame, gpu: &plows_exporter::collector::GpuSnaps
                 Style::default().fg(temp_color(temp)).bold(),
             ),
             Span::styled("    Power: ", Style::default().fg(DARK_GRAY)),
-            Span::styled(
-                power_text,
-                Style::default().fg(YELLOW).bold(),
-            ),
+            Span::styled(power_text, Style::default().fg(YELLOW).bold()),
             Span::styled("    Fan: ", Style::default().fg(DARK_GRAY)),
             match fan {
                 Some(f) => Span::styled(format!("{f}%"), Style::default().fg(CYAN).bold()),
@@ -1462,28 +1463,52 @@ mod apple_tests {
         assert!(text.contains("shared, not VRAM"));
     }
 
-    #[test]
-    fn gpu_metrics_renders_na_for_unified_memory_and_missing_limits() {
-        let gpu = plows_exporter::collector::GpuSnapshot::new(
-            0,
-            "nvidia",
-            "PCI:00".into(),
-            "NVIDIA GB10".into(),
-            "uuid-gb10".into(),
-        );
+    fn render_gpu_metrics(gpu: &plows_exporter::collector::GpuSnapshot) -> String {
         let mut terminal = Terminal::new(TestBackend::new(100, 10)).unwrap();
         terminal
-            .draw(|frame| draw_gpu_metrics(frame, &gpu, frame.area()))
+            .draw(|frame| draw_gpu_metrics(frame, gpu, frame.area()))
             .unwrap();
-        let text: String = terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(|c| c.symbol())
-            .collect();
-        assert!(text.contains("Power:") && text.contains("N/A"));
-        assert!(text.contains("Clocks:") && text.contains("N/A"));
+        let buffer = terminal.backend().buffer();
+        buffer.content.iter().map(|c| c.symbol()).collect()
+    }
+
+    fn gb10() -> plows_exporter::collector::GpuSnapshot {
+        plows_exporter::collector::GpuSnapshot::new(
+            0,
+            "nvidia",
+            "host".into(),
+            "NVIDIA GB10".into(),
+            "uuid-gb10".into(),
+        )
+    }
+
+    #[test]
+    fn gpu_metrics_shows_draw_alone_when_no_power_limit_is_reported() {
+        let mut gpu = gb10();
+        gpu.power_usage_mw = Some(4_200);
+        gpu.clock_core_mhz = Some(208);
+        let text = render_gpu_metrics(&gpu);
+        assert!(text.contains("Power: 4 W "), "{text}");
+        assert!(
+            !text.contains("4/0 W") && !text.contains("W / N/A"),
+            "{text}"
+        );
+        // Unified-memory SoCs report no memory clock.
+        assert!(text.contains("208 MHz core  N/A mem"), "{text}");
+    }
+
+    #[test]
+    fn gpu_metrics_marks_missing_power_and_keeps_reported_limits() {
+        let text = render_gpu_metrics(&gb10());
+        assert!(text.contains("Power: N/A "), "{text}");
+
+        let mut gpu = gb10();
+        gpu.power_usage_mw = Some(90_000);
+        gpu.power_limit_mw = Some(140_000);
+        gpu.clock_memory_mhz = Some(7_000);
+        let text = render_gpu_metrics(&gpu);
+        assert!(text.contains("Power: 90/140 W"), "{text}");
+        assert!(text.contains("7000 MHz mem"), "{text}");
     }
 }
 

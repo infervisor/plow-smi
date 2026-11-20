@@ -60,6 +60,38 @@ pub struct GpuListEntry {
     pub memory_total: String,
 }
 
+/// Placeholder for telemetry a device does not report.
+pub const NOT_AVAILABLE: &str = "N/A";
+
+impl GpuListEntry {
+    /// Table cell for the temperature, e.g. `46°C`.
+    pub fn temperature_cell(&self) -> String {
+        self.temperature_c
+            .map_or_else(|| NOT_AVAILABLE.into(), |t| format!("{t}°C"))
+    }
+
+    /// Table cell for power draw and limit, e.g. `4/140W`, or `4W` when the
+    /// device has no power limit (integrated and SoC GPUs).
+    pub fn power_cell(&self) -> String {
+        match (self.power_w, self.power_limit_w) {
+            (Some(power), Some(limit)) => format!("{power}/{limit}W"),
+            (Some(power), None) => format!("{power}W"),
+            (None, Some(limit)) => format!("{NOT_AVAILABLE}/{limit}W"),
+            (None, None) => NOT_AVAILABLE.into(),
+        }
+    }
+
+    /// Table cell for memory, e.g. `2.0 GiB/8.0 GiB`; a single `N/A` when the
+    /// device reports no dedicated memory (unified-memory SoCs).
+    pub fn memory_cell(&self) -> String {
+        if self.memory_used == NOT_AVAILABLE && self.memory_total == NOT_AVAILABLE {
+            NOT_AVAILABLE.into()
+        } else {
+            format!("{}/{}", self.memory_used, self.memory_total)
+        }
+    }
+}
+
 /// Print one outcome: the human line for `text`, the outcome for `json`.
 pub fn emit(format: &OutputFormat, outcome: &Outcome, text: String) -> anyhow::Result<()> {
     match format {
@@ -111,4 +143,42 @@ pub mod cli;
 /// Human-readable optional telemetry.
 pub fn value_or_na(value: Option<impl std::fmt::Display>) -> String {
     value.map(|v| v.to_string()).unwrap_or_else(|| "N/A".into())
+}
+
+#[cfg(test)]
+mod list_entry_tests {
+    use super::*;
+
+    fn entry(power: Option<u64>, limit: Option<u64>, memory: Option<(&str, &str)>) -> GpuListEntry {
+        let (used, total) = memory.unwrap_or((NOT_AVAILABLE, NOT_AVAILABLE));
+        GpuListEntry {
+            index: 0,
+            name: "NVIDIA GB10".into(),
+            uuid: "uuid".into(),
+            temperature_c: None,
+            power_w: power,
+            power_limit_w: limit,
+            memory_used: used.into(),
+            memory_total: total.into(),
+        }
+    }
+
+    #[test]
+    fn unified_memory_soc_cells_collapse_to_a_single_placeholder() {
+        let e = entry(Some(4), None, None);
+        assert_eq!(e.power_cell(), "4W");
+        assert_eq!(e.memory_cell(), "N/A");
+        assert_eq!(e.temperature_cell(), "N/A");
+    }
+
+    #[test]
+    fn discrete_gpu_cells_show_both_values() {
+        let mut e = entry(Some(90), Some(140), Some(("2.0 GiB", "8.0 GiB")));
+        e.temperature_c = Some(46);
+        assert_eq!(e.power_cell(), "90/140W");
+        assert_eq!(e.memory_cell(), "2.0 GiB/8.0 GiB");
+        assert_eq!(e.temperature_cell(), "46°C");
+        assert_eq!(entry(None, Some(140), None).power_cell(), "N/A/140W");
+        assert_eq!(entry(None, None, None).power_cell(), "N/A");
+    }
 }

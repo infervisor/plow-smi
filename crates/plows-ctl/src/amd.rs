@@ -64,13 +64,12 @@ pub fn list_gpus(format: &OutputFormat) -> Result<()> {
             println!("{}", "─".repeat(80));
             for e in &entries {
                 println!(
-                    "{:>3} {:30} {:>4}°C {:>5}/{:<5}W {:>16}",
+                    "{:>3} {:30} {:>6} {:>12} {:>16}",
                     e.index.to_string().cyan(),
                     e.name,
-                    crate::value_or_na(e.temperature_c),
-                    crate::value_or_na(e.power_w),
-                    crate::value_or_na(e.power_limit_w),
-                    format!("{}/{}", e.memory_used, e.memory_total),
+                    e.temperature_cell(),
+                    e.power_cell(),
+                    e.memory_cell(),
                 );
             }
         }
