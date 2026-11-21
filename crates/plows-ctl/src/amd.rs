@@ -7,6 +7,7 @@ use plows_gpu::{AmdBackend, GpuBackend};
 use crate::outcome::{Outcome, Status};
 use crate::{
     emit, emit_all, failed, format_bytes, text_line, GpuListEntry, OutputFormat, PerfLevel,
+    NOT_AVAILABLE,
 };
 
 fn init_backend() -> Result<AmdBackend> {
@@ -40,11 +41,11 @@ pub fn list_gpus(format: &OutputFormat) -> Result<()> {
             memory_used: m
                 .memory_used
                 .map(format_bytes)
-                .unwrap_or_else(|| "N/A".into()),
+                .unwrap_or_else(|| NOT_AVAILABLE.into()),
             memory_total: m
                 .memory_total
                 .map(format_bytes)
-                .unwrap_or_else(|| "N/A".into()),
+                .unwrap_or_else(|| NOT_AVAILABLE.into()),
         });
     }
 

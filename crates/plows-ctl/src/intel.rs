@@ -4,7 +4,7 @@ use anyhow::{bail, Result};
 use colored::Colorize;
 use plows_gpu::{GpuBackend, IntelBackend};
 
-use crate::{format_bytes, GpuListEntry, OutputFormat};
+use crate::{format_bytes, GpuListEntry, OutputFormat, NOT_AVAILABLE};
 
 fn init_backend() -> Result<IntelBackend> {
     IntelBackend::try_load().map_err(|e| {
@@ -36,11 +36,11 @@ pub fn list_gpus(format: &OutputFormat) -> Result<()> {
             memory_used: m
                 .memory_used
                 .map(format_bytes)
-                .unwrap_or_else(|| "N/A".into()),
+                .unwrap_or_else(|| NOT_AVAILABLE.into()),
             memory_total: m
                 .memory_total
                 .map(format_bytes)
-                .unwrap_or_else(|| "N/A".into()),
+                .unwrap_or_else(|| NOT_AVAILABLE.into()),
         });
     }
 

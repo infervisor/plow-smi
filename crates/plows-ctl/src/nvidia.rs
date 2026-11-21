@@ -40,11 +40,11 @@ pub fn list_gpus(format: &OutputFormat) -> Result<()> {
             memory_used: m
                 .memory_used
                 .map(format_bytes)
-                .unwrap_or_else(|| "N/A".into()),
+                .unwrap_or_else(|| NOT_AVAILABLE.into()),
             memory_total: m
                 .memory_total
                 .map(format_bytes)
-                .unwrap_or_else(|| "N/A".into()),
+                .unwrap_or_else(|| NOT_AVAILABLE.into()),
         });
     }
 
