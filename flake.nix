@@ -90,6 +90,10 @@
           dontCargoSetupPostUnpack = true;
 
           postUnpack = ''
+            # Without a sandbox the placeholder $HOME is creatable: cargo
+            # would leave /homeless-shelter/.cargo behind and Nix then
+            # refuses every later build.
+            export HOME="$(mktemp -d)"
             ln -s "$cargoDeps" cargo-vendor-dir
             export cargoDepsCopy="$(realpath cargo-vendor-dir)"
             mkdir -p .cargo
