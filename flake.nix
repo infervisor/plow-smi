@@ -71,6 +71,41 @@
           };
         };
 
+        # The same build for hosts where Nix runs under PRoot (nix-portable
+        # without user namespaces, e.g. AppArmor-restricted Ubuntu). PRoot
+        # cannot run the stock unpack and vendor-copy steps, so this variant
+        # unpacks with tar and links the vendored crates instead of copying
+        # them. It skips nixpkgs' cargo setup hook and with it the stdenv
+        # linker and rustflags config, so it is for local use only: releases
+        # and CI build `workspace`.
+        workspaceProot = workspace.overrideAttrs (old: {
+          pname = "plow-smi-workspace-proot";
+
+          unpackCmd = ''
+            dest="$(stripHash "$curSrc")"
+            mkdir -p "$dest"
+            tar -C "$curSrc" -cf - . | tar -C "$dest" -xf -
+          '';
+
+          dontCargoSetupPostUnpack = true;
+
+          postUnpack = ''
+            # Without a sandbox the placeholder $HOME is creatable: cargo
+            # would leave /homeless-shelter/.cargo behind and Nix then
+            # refuses every later build.
+            export HOME="$(mktemp -d)"
+            ln -s "$cargoDeps" cargo-vendor-dir
+            export cargoDepsCopy="$(realpath cargo-vendor-dir)"
+            mkdir -p .cargo
+            substitute "$cargoDeps/.cargo/config.toml" .cargo/config.toml \
+              --subst-var-by vendor "$cargoDepsCopy"
+          '';
+
+          meta = old.meta // {
+            description = "Plow SMI — all binaries, built on a PRoot-based Nix (local use)";
+          };
+        });
+
         mkBinPackage = name: { cargoPackage, description }:
           pkgs.runCommand name
             {
@@ -105,6 +140,8 @@
           # Full workspace build: every binary in one derivation
           # (`nix build .#all`), useful for images/CI artifact bundling.
           all = workspace;
+          # `nix build .#all-proot` on a PRoot-based Nix (see workspaceProot).
+          all-proot = workspaceProot;
           # Relocatable archives, usable without Nix installed.
           inherit release;
         };

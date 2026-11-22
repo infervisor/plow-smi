@@ -4,7 +4,7 @@ use anyhow::Result;
 use colored::Colorize;
 use plows_gpu::GpuManager;
 
-use crate::{format_bytes, GpuListEntry, OutputFormat};
+use crate::{format_bytes, GpuListEntry, OutputFormat, NOT_AVAILABLE};
 
 /// List every GPU discovered by `plows-gpu`.
 pub fn list_all(format: &OutputFormat) -> Result<()> {
@@ -32,11 +32,11 @@ pub fn list_all(format: &OutputFormat) -> Result<()> {
                     memory_used: m
                         .memory_used
                         .map(format_bytes)
-                        .unwrap_or_else(|| "N/A".into()),
+                        .unwrap_or_else(|| NOT_AVAILABLE.into()),
                     memory_total: m
                         .memory_total
                         .map(format_bytes)
-                        .unwrap_or_else(|| "N/A".into()),
+                        .unwrap_or_else(|| NOT_AVAILABLE.into()),
                 },
             ));
             global += 1;
@@ -81,14 +81,13 @@ pub fn list_all(format: &OutputFormat) -> Result<()> {
             println!("{}", "─".repeat(90));
             for (vendor, e) in &entries {
                 println!(
-                    "{:>3} {:8} {:28} {:>4}°C {:>5}/{:<5}W {:>16}",
+                    "{:>3} {:8} {:28} {:>6} {:>12} {:>16}",
                     e.index.to_string().cyan(),
                     vendor,
                     e.name,
-                    crate::value_or_na(e.temperature_c),
-                    crate::value_or_na(e.power_w),
-                    crate::value_or_na(e.power_limit_w),
-                    format!("{}/{}", e.memory_used, e.memory_total),
+                    e.temperature_cell(),
+                    e.power_cell(),
+                    e.memory_cell(),
                 );
             }
         }

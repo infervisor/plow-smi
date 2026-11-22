@@ -7,6 +7,7 @@ use plows_gpu::{GpuBackend, NvidiaBackend};
 use crate::outcome::{Outcome, Status};
 use crate::{
     emit, emit_all, failed, format_bytes, text_line, GpuListEntry, OutputFormat, PerfLevel,
+    NOT_AVAILABLE,
 };
 
 fn init_backend() -> Result<NvidiaBackend> {
@@ -36,8 +37,14 @@ pub fn list_gpus(format: &OutputFormat) -> Result<()> {
             temperature_c: m.temperature.map(|t| t as i64),
             power_w: m.power_usage.map(|w| w as u64),
             power_limit_w: m.power_limit.map(|w| w as u64),
-            memory_used: m.memory_used.map(format_bytes).unwrap_or_default(),
-            memory_total: m.memory_total.map(format_bytes).unwrap_or_default(),
+            memory_used: m
+                .memory_used
+                .map(format_bytes)
+                .unwrap_or_else(|| NOT_AVAILABLE.into()),
+            memory_total: m
+                .memory_total
+                .map(format_bytes)
+                .unwrap_or_else(|| NOT_AVAILABLE.into()),
         });
     }
 
@@ -59,13 +66,12 @@ pub fn list_gpus(format: &OutputFormat) -> Result<()> {
             println!("{}", "─".repeat(80));
             for e in &entries {
                 println!(
-                    "{:>3} {:30} {:>4}°C {:>5}/{:<5}W {:>16}",
+                    "{:>3} {:30} {:>6} {:>12} {:>16}",
                     e.index.to_string().cyan(),
                     e.name,
-                    crate::value_or_na(e.temperature_c),
-                    crate::value_or_na(e.power_w),
-                    crate::value_or_na(e.power_limit_w),
-                    format!("{}/{}", e.memory_used, e.memory_total),
+                    e.temperature_cell(),
+                    e.power_cell(),
+                    e.memory_cell(),
                 );
             }
         }
@@ -116,29 +122,44 @@ pub fn gpu_info(index: u32, format: &OutputFormat) -> Result<()> {
             println!("{}", format!("GPU {index}: {}", device.model).cyan().bold());
             println!("{}", "─".repeat(50));
             println!("  UUID:          {}", device.uuid);
-            println!("  Temperature:   {}°C", m.temperature.unwrap_or(0.0));
             println!(
-                "  Power:         {:.0} / {:.0} W",
-                m.power_usage.unwrap_or(0.0),
-                m.power_limit.unwrap_or(0.0)
+                "  Temperature:   {}",
+                m.temperature
+                    .map_or_else(|| NOT_AVAILABLE.into(), |t| format!("{t}°C"))
             );
+            let power = match (m.power_usage, m.power_limit) {
+                (Some(usage), Some(limit)) => format!("{usage:.0} / {limit:.0} W"),
+                (Some(usage), None) => format!("{usage:.0} W (no power limit reported)"),
+                (None, Some(limit)) => format!("{NOT_AVAILABLE} / {limit:.0} W"),
+                (None, None) => NOT_AVAILABLE.into(),
+            };
+            println!("  Power:         {power}");
             if let (Some(min), Some(max)) = (min_power, max_power) {
                 println!("  Power Range:   {} - {} W", min / 1000, max / 1000);
             }
-            if let (Some(used), Some(total)) = (m.memory_used, m.memory_total) {
-                println!(
+            // NVML reports no framebuffer on unified-memory SoCs such as GB10,
+            // where the GPU allocates from system RAM. A missing value alone
+            // does not prove that, so the text only says what was observed.
+            match (m.memory_used, m.memory_total) {
+                (Some(used), Some(total)) => println!(
                     "  Memory:        {} / {}",
                     format_bytes(used),
                     format_bytes(total)
-                );
+                ),
+                _ => println!(
+                    "  Memory:        {NOT_AVAILABLE} (no dedicated memory reported; \
+                     unified-memory GPUs share system RAM)"
+                ),
             }
             println!(
-                "  Core Clock:    {} MHz (max: {max_core} MHz)",
-                m.clock_graphics.unwrap_or(0)
+                "  Core Clock:    {} (max: {})",
+                mhz_or_na(m.clock_graphics),
+                mhz_or_na(Some(max_core).filter(|&c| c > 0))
             );
             println!(
-                "  Memory Clock:  {} MHz (max: {max_mem} MHz)",
-                m.clock_memory.unwrap_or(0)
+                "  Memory Clock:  {} (max: {})",
+                mhz_or_na(m.clock_memory),
+                mhz_or_na(Some(max_mem).filter(|&c| c > 0))
             );
             if let Some(f) = m.fan_speed {
                 println!("  Fan:           {f}%");
@@ -149,6 +170,11 @@ pub fn gpu_info(index: u32, format: &OutputFormat) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// `1234 MHz`, or `N/A` for a clock the device does not report.
+fn mhz_or_na(mhz: Option<u32>) -> String {
+    mhz.map_or_else(|| NOT_AVAILABLE.into(), |c| format!("{c} MHz"))
 }
 
 fn clocks_value(clocks: Option<(u32, u32)>) -> Option<serde_json::Value> {

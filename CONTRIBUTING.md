@@ -28,6 +28,7 @@ Or via Nix:
 ```bash
 nix build            # unified plow-smi CLI
 nix build .#all      # every binary in one derivation
+nix build .#all-proot # same, for a PRoot-based Nix (nix-portable without user namespaces)
 nix run .#plows-top   # run a single binary directly
 nix flake check       # build + test every package
 ```
